@@ -5,21 +5,22 @@ from __future__ import annotations
 # Positive values boost relevance_score; negative values demote it.
 # ---------------------------------------------------------------------------
 TITLE_WEIGHTS: list[tuple[str, int]] = [
+    # Negative / off-target specific matches first
+    ("associate product manager", -25),
+    ("associate pm", -25),
+    ("implementation manager", -35),
+    ("business analyst", -35),
+    ("project manager", -40),
+    ("program manager", -20),
+    ("product analyst", -20),
+    ("scrum master", -30),
+    # Positive matches
     ("group product manager", 32),
     ("senior product manager", 30),
     ("lead product manager", 28),
     ("product manager ii", 25),
     ("product manager 2", 25),
     ("product manager", 18),      # keep last to avoid substring shadowing
-    # Negative / off-target
-    ("implementation manager", -35),
-    ("business analyst", -35),
-    ("project manager", -40),
-    ("program manager", -20),
-    ("product analyst", -20),
-    ("associate product manager", -25),
-    ("associate pm", -25),
-    ("scrum master", -30),
 ]
 
 # ---------------------------------------------------------------------------

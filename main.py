@@ -386,7 +386,7 @@ def recommend(
     _configure_logging()
     from storage.db import JobDB
     from services.scoring import score_job, _company_slug
-    from services.company_intel import build_company_profiles
+    from services.company_intel import build_company_profiles, enrich_from_funding_data
     import json
 
     db = JobDB()
@@ -394,7 +394,9 @@ def recommend(
         # Refresh company intel first
         typer.echo("Refreshing company intelligence cache...")
         n_profiles = build_company_profiles(db)
-        typer.echo(f"  {n_profiles} company profiles indexed.\n")
+        n_funded = enrich_from_funding_data(db)
+        typer.echo(f"  {n_profiles} company profiles indexed.")
+        typer.echo(f"  {n_funded} funded companies refreshed.\n")
 
         company_profiles = db.get_all_company_profiles()
 
@@ -619,12 +621,15 @@ def today() -> None:
     _configure_logging()
     from storage.db import JobDB
     from services.scoring import score_job, _company_slug
+    from services.company_intel import build_company_profiles, enrich_from_funding_data
     import json
     from datetime import datetime as _dt, timedelta
 
     db = JobDB()
     try:
         # Ensure scoring is up to date
+        build_company_profiles(db)
+        enrich_from_funding_data(db)
         to_score = db.get_jobs_for_scoring(rescore_all=False)
         if to_score:
             company_profiles = db.get_all_company_profiles()

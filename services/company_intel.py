@@ -62,22 +62,24 @@ def build_company_profiles(db: "JobDB") -> int:
     Returns the number of profiles upserted.
     """
     profiles: dict[str, dict] = {}
+    existing_profiles = db.get_all_company_profiles()
 
     def _get_or_create(slug: str, display_name: str) -> dict:
         if slug not in profiles:
+            existing = existing_profiles.get(slug, {})
             profiles[slug] = {
                 "normalized_company": slug,
-                "company_display_name": display_name,
-                "company_domain": "",
-                "is_mnc": 0,
-                "is_funded": 0,
-                "funding_series": None,
-                "funding_amount": None,
-                "funding_date": None,
-                "pm_open_roles_count": 0,
-                "seen_platforms": [],
-                "careers_page": None,
-                "hq_location": None,
+                "company_display_name": existing.get("company_display_name") or display_name,
+                "company_domain": existing.get("company_domain") or "",
+                "is_mnc": int(existing.get("is_mnc", 0)),
+                "is_funded": int(existing.get("is_funded", 0)),
+                "funding_series": existing.get("funding_series"),
+                "funding_amount": existing.get("funding_amount"),
+                "funding_date": existing.get("funding_date"),
+                "pm_open_roles_count": int(existing.get("pm_open_roles_count") or 0),
+                "seen_platforms": list(existing.get("seen_platforms") or []),
+                "careers_page": existing.get("careers_page"),
+                "hq_location": existing.get("hq_location"),
                 "last_refreshed_at": datetime.now().isoformat(),
             }
         return profiles[slug]
@@ -108,6 +110,7 @@ def build_company_profiles(db: "JobDB") -> int:
                 slug = _company_slug(vc.name)
                 p = _get_or_create(slug, vc.name)
                 p["careers_page"] = p.get("careers_page") or vc.job_portal_url
+                p["company_domain"] = p.get("company_domain") or _extract_domain(vc.job_portal_url)
     except ImportError:
         pass
 
@@ -220,9 +223,9 @@ def enrich_from_funding_data(db: "JobDB", output_dir: Optional[str] = None) -> i
             if funding_date:
                 profile["funding_date"] = funding_date
             if row.get("Careers Page"):
-                profile.setdefault("careers_page", row["Careers Page"].strip() or None)
+                profile["careers_page"] = profile.get("careers_page") or row["Careers Page"].strip() or None
             if row.get("HQ Location"):
-                profile.setdefault("hq_location", row["HQ Location"].strip())
+                profile["hq_location"] = profile.get("hq_location") or row["HQ Location"].strip()
 
             db.upsert_company_profile(profile)
             updated += 1

@@ -36,9 +36,25 @@ def _normalize(text: str) -> str:
 
 
 def _company_slug(name: str) -> str:
-    """Remove punctuation + legal suffixes, return lowercase slug."""
+    """Return normalized company slug for matching."""
     s = re.sub(r"[^a-z0-9 ]", "", _normalize(name))
     return re.sub(r"\s+", " ", s).strip()
+
+
+def _slug_tokens(name: str) -> set[str]:
+    return {token for token in _company_slug(name).split() if token}
+
+
+def _is_known_high_paying_company(company_name: str) -> bool:
+    slug = _company_slug(company_name)
+    tokens = _slug_tokens(company_name)
+
+    if slug in HIGH_PAYING_COMPANIES:
+        return True
+
+    # Fall back to token-aware matching so short names like "sap" don't
+    # accidentally match unrelated companies such as "Publicis Sapient".
+    return any(" " in known and set(known.split()) == tokens for known in HIGH_PAYING_COMPANIES)
 
 
 def _priority_bucket(score: int) -> str:
@@ -162,7 +178,7 @@ def score_job(job: dict, company_profile: Optional[dict] = None) -> dict:
     salary = 0
 
     company_slug = _company_slug(job.get("company", ""))
-    if any(hpc in company_slug for hpc in HIGH_PAYING_COMPANIES):
+    if _is_known_high_paying_company(job.get("company", "")):
         salary += HIGH_PAYING_COMPANY_SCORE
         reasons.append("high_paying_company")
 

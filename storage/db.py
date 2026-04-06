@@ -20,6 +20,7 @@ class JobDB:
         self.conn.row_factory = sqlite3.Row
         self._init_tables()
         self._migrate_columns()
+        self._ensure_indexes()
 
     # ------------------------------------------------------------------
     # Schema init
@@ -55,7 +56,6 @@ class JobDB:
             CREATE INDEX IF NOT EXISTS idx_dedup_hash ON jobs(dedup_hash);
             CREATE INDEX IF NOT EXISTS idx_platform ON jobs(platform);
             CREATE INDEX IF NOT EXISTS idx_scraped_at ON jobs(scraped_at);
-            CREATE INDEX IF NOT EXISTS idx_priority_score ON jobs(priority_score);
 
             CREATE TABLE IF NOT EXISTS runs (
                 run_id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -152,6 +152,13 @@ class JobDB:
                 self.conn.execute(
                     f"ALTER TABLE jobs ADD COLUMN {col_name} {col_ddl}"
                 )
+        self.conn.commit()
+
+    def _ensure_indexes(self) -> None:
+        """Create indexes only after migrations so older DBs open cleanly."""
+        self.conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_priority_score ON jobs(priority_score)"
+        )
         self.conn.commit()
 
     # ------------------------------------------------------------------
