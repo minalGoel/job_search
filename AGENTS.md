@@ -108,6 +108,36 @@ This is a Python async CLI tool for aggregating PM job listings across 14 platfo
 - Thread-aware: follow-ups include `threadId` from step 1's response
 - Daily limit enforced by `get_today_send_count()` in OutreachDB
 
+### Scoring / Decision Engine Agent
+**When to use**: Modifying scoring weights, adding new signals, changing bucket thresholds, or touching any of the P0–P2 services.
+
+**Key files to read first**:
+- `config/scoring_rules.py` — All heuristic constants (title weights, keyword lists, salary signals, bucket thresholds). Change weights here, not in scoring.py.
+- `services/scoring.py` — Core scorer. Reads rules from scoring_rules.py. `_company_slug()` is the canonical normalisation function — import it from here, never reimplement inline.
+- `services/company_intel.py` — Builds `company_profiles` table from MNC registry, VC registry, and scraped jobs. `enrich_from_funding_data()` reads from the latest `output/funded_companies_*.csv` — run `funding` command first.
+- `services/connection_matcher.py` — LinkedIn CSV import + warmth scoring. Writes to `network_contacts` and `job_connection_matches` tables.
+- `storage/db.py` — `get_jobs_for_scoring()`, `update_job_scores()`, `get_top_recommended_jobs()`, `get_job_by_id()`, `update_job_warmth_score()`.
+- `data/candidate_profile.json` — Candidate proof points used by outreach writer. User must fill this in.
+
+**Critical rules**:
+- `_company_slug()` from `services/scoring.py` is the single source of truth for company normalisation. Always import and use it — never compute slugs inline with regex. Inconsistency here causes company profile lookups to miss.
+- `priority_bucket = ''` is the "unscored" sentinel. `get_jobs_for_scoring()` checks this, NOT `priority_score = 0` (a legitimately poor job can score 0 and must not be rescored repeatedly).
+- `update_job_warmth_score()` does NOT commit. After a batch loop, call `db.conn.commit()` once at the end.
+- Scoring is done on plain dicts from `JobDB`, not on `Job` model instances. `Job.score_reasons` and `Job.priority_flags` are `list[str]` in the model but stored as JSON strings in the DB.
+
+**Score component summary**:
+- `relevance_score` (0-100): title match + keyword signals + location + recency + direct source
+- `salary_likelihood_score` (0-100): known high-paying company + MNC flag + funding series + seniority
+- `warmth_score` (0-100): 0 until connections imported; updated by `connection_matcher.py`
+- `company_quality_score` (0-100): MNC + funded + multiple PM roles + careers page present
+- `priority_score` = relevance×0.45 + salary×0.30 + warmth×0.15 + quality×0.10
+
+**Tables added to jobs.db**:
+- `company_profiles` — keyed by normalized_company slug
+- `applications` — application tracker (shortlist → applied → interviewing → offer)
+- `network_contacts` — imported from LinkedIn CSV
+- `job_connection_matches` — warmth match rows per job + contact
+
 ### Pipeline/CLI Agent
 **When to use**: Modifying the main orchestration logic or adding CLI commands.
 
@@ -115,10 +145,14 @@ This is a Python async CLI tool for aggregating PM job listings across 14 platfo
 - `main.py` — Typer CLI with all commands, `_run_all()` orchestrates scrape → dedup → export → notify
 - `config/settings.py` — Pydantic-settings loading from .env
 
-**CLI command map (14 commands)**:
+**CLI command map (24 commands)**:
 - `run`, `schedule`, `login`, `export`, `status` — core job scraping
 - `funding`, `vc-jobs`, `mnc-jobs`, `run-all` — supplementary sources
-- `outreach-enrich`, `outreach-review`, `outreach-send`, `outreach-status`, `outreach-reply` — outreach pipeline
+- `recommend`, `today`, `company-intel-refresh`, `connections-import` — decision engine
+- `shortlist`, `apply-status`, `pipeline-status` — application tracker
+- `draft-message` — outreach message generator
+- `analytics` — source quality + conversion stats
+- `outreach-enrich`, `outreach-review`, `outreach-send`, `outreach-status`, `outreach-reply` — Apollo/Gmail outreach pipeline
 
 ## Common Pitfalls
 
@@ -133,6 +167,10 @@ This is a Python async CLI tool for aggregating PM job listings across 14 platfo
 9. **HTML escaping**: Use `html.escape()` for all user-supplied data in HTML output (reviewer, notifier).
 10. **Search query**: Each scraper must pass `self.search_params.title_keywords[0]` as the search term — never a hardcoded string. Hardcoding silently ignores user config.
 11. **Contact name extraction**: Use `.strip()` before `.split()[0]` when extracting first name from contact names — whitespace-only strings will cause IndexError otherwise.
+12. **Company slug consistency**: Always use `_company_slug()` from `services/scoring.py` when building or looking up keys in `company_profiles`. Inline regex that skips suffix-stripping will silently miss matches for "Meesho Technologies" → "meesho technologies" (inline) vs "meesho" (correct slug).
+13. **Unscored sentinel**: `priority_bucket = ''` means a job has never been scored. Do NOT check `priority_score = 0` as the "needs scoring" condition — a job with all-negative signals legitimately scores 0 and should not be rescored on every run.
+14. **Funding data flow**: The funding scanner writes to `output/funded_companies_*.csv`, NOT to jobs.db. `enrich_from_funding_data()` reads from that CSV. Always run `python main.py funding` before `company-intel-refresh` if you want funded company signals.
+15. **Direct db.conn access**: Never access `db.conn` from outside `storage/db.py`. If you need a new DB operation, add a method to `JobDB`. Exception: `connection_matcher.py` calls `db.conn.commit()` once after a batch of `update_job_warmth_score()` calls — this is intentional and documented.
 
 ## Testing Approach
 
@@ -140,9 +178,12 @@ This is a Python async CLI tool for aggregating PM job listings across 14 platfo
 - **Browser test**: `python main.py run -p naukri` (Playwright + HTML parsing)
 - **Login test**: `python main.py login instahyre` (headed browser, manual login)
 - **Full test**: `python main.py run-all` (all sources)
+- **Scoring test**: `python main.py recommend --rescore` (verify scoring engine end-to-end)
+- **Company intel test**: `python main.py company-intel-refresh` (verify MNC/VC registry loading)
 - **Outreach test**: `python main.py outreach-status` (verify DB + credit tracking)
 - **Import check**: `python -c "from scrapers import SCRAPER_REGISTRY; print(len(SCRAPER_REGISTRY))"`
 - **Outreach import check**: `python -c "from outreach.pipeline import run_enrich, run_send"`
+- **Scoring import check**: `python -c "from services.scoring import score_job, _company_slug; print(score_job({'title':'Senior Product Manager','company':'Google','location':'Gurugram','platform':'naukri'}))"`
 
 ## File Organization Rules
 

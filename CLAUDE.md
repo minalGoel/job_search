@@ -72,6 +72,18 @@ job_search/
 │   ├── reviewer.py                # Localhost HTTP server (port 8899) with approve/edit/skip/snooze UI
 │   ├── gmail_sender.py            # Gmail API OAuth2, 25/day rate limit, thread-aware follow-ups
 │   └── pipeline.py                # Orchestrates enrich -> template -> review -> send -> track
+├── services/
+│   ├── __init__.py
+│   ├── cookie_manager.py          # Interactive login flow, LOGIN_URLS dict, cookie health check
+│   ├── dedup.py                   # Cross-platform duplicate marking via dedup_hash
+│   ├── exporter.py                # CSV per-run + cumulative Excel (openpyxl) with conditional formatting
+│   ├── notifier.py                # SMTP email alerts for new jobs + session expiry warnings
+│   ├── scoring.py                 # Weighted heuristic scorer → relevance/salary/warmth/quality/priority scores + flags
+│   ├── company_intel.py           # Company profile cache (MNC registry + VC registry + scraped jobs)
+│   ├── connection_matcher.py      # LinkedIn CSV import + warmth scoring via company/alumni matching
+│   └── outreach_writer.py         # 4 deterministic outreach templates (recruiter/HM/funded/warm-intro)
+├── data/
+│   └── candidate_profile.json     # Candidate proof points, strengths, target comp — fill in before using outreach writer
 ├── output/                        # Runtime: jobs.db, outreach.db, CSV/Excel exports (gitignored)
 ├── .env.example                   # Template for SMTP, Apollo, Gmail, schedule, logging config
 ├── requirements.txt               # Python dependencies
@@ -89,7 +101,10 @@ job_search/
 - **Playwright stealth** uses `playwright_stealth.Stealth().apply_stealth(context)` (v2 API, NOT `stealth_async`)
 - **Async everywhere**: all scrapers, browser ops, and the main pipeline use asyncio
 - **Error isolation**: each scraper runs in its own try/except via `_safe_scrape()`, failures don't cascade
-- **Two SQLite databases**: `output/jobs.db` (jobs + runs) and `output/outreach.db` (contacts + emails + credits)
+- **Two SQLite databases**: `output/jobs.db` (jobs + runs + scoring tables) and `output/outreach.db` (contacts + emails + credits)
+- **Company slug normalisation**: `_company_slug()` in `services/scoring.py` strips punctuation and legal suffixes (pvt, ltd, technologies, etc.). All modules that look up `company_profiles` keys must use this same function — never compute slugs inline.
+- **Scoring is dict-based**: `score_job()` and `score_jobs()` operate on plain dicts (as returned by `JobDB`), not on `Job` model instances. Score fields are persisted via `db.update_job_scores()`.
+- **priority_bucket is the "scored" sentinel**: A job with `priority_bucket = ''` has never been scored. `get_jobs_for_scoring()` uses this condition — not `priority_score = 0`, which would incorrectly rescore legitimately poor-signal jobs.
 
 ## CLI Commands
 
@@ -110,12 +125,36 @@ python main.py vc-jobs                      # Scrape VC portfolio job boards
 python main.py mnc-jobs                     # Scrape US MNC career pages
 python main.py run-all                      # Everything in sequence
 
-# Outreach pipeline
+# Decision engine (run after scraping)
+python main.py recommend                    # Score + rank jobs, print shortlist, export CSV
+python main.py recommend --top 50 --bucket high  # Filter options
+python main.py recommend --rescore          # Force rescore all jobs
+python main.py today                        # Daily action queue: apply / warm leads / follow-ups
+python main.py company-intel-refresh        # Rebuild company profile cache from local data
+python main.py connections-import linkedin.csv   # Import LinkedIn connections + warmth matching
+python main.py connections-import linkedin.csv --alumni "IIT Delhi" --alumni "BITS Pilani"
+
+# Application tracker
+python main.py shortlist --job-id JOBID     # Mark a job as shortlisted
+python main.py apply-status --job-id JOBID --status applied   # Update application stage
+python main.py pipeline-status              # Full pipeline summary
+
+# Outreach
+python main.py draft-message --job-id JOBID --type recruiter          # Draft recruiter message
+python main.py draft-message --job-id JOBID --type hiring-manager     # Draft hiring-manager message
+python main.py draft-message --job-id JOBID --type funded-startup     # Draft for funded startups
+python main.py draft-message --job-id JOBID --type warm-intro --mutual "Alice Smith"
+python main.py draft-message --job-id JOBID --type recruiter --save   # Save to output/drafts/
+
+# Apollo/Gmail outreach pipeline
 python main.py outreach-enrich              # Apollo enrichment -> email drafts
 python main.py outreach-review              # Browser review page (localhost:8899)
 python main.py outreach-send                # Send approved emails via Gmail API
 python main.py outreach-status              # Pipeline stats + credit usage
 python main.py outreach-reply CONTACT_ID    # Mark reply, cancel follow-ups
+
+# Analytics
+python main.py analytics                    # Source quality + conversion stats
 ```
 
 ## Outreach System
@@ -162,3 +201,7 @@ Key rules:
 - Every scraper MUST use `self.search_params.title_keywords[0]` (not hardcoded strings) for its search query
 - `OUTREACH_EXPERIENCE_YEARS` is typed as `int` in Settings; `.env` value is coerced automatically by pydantic-settings
 - `_get_page()` in vc_portals and mnc_careers scrapers closes the page on `goto` failure -- follow this pattern in new scrapers too
+- `enrich_from_funding_data()` reads from `output/funded_companies_*.csv` (not jobs.db). Run `python main.py funding` first to produce that file.
+- Never access `db.conn` directly from outside `storage/db.py`. Add a method to `JobDB` instead.
+- `update_job_warmth_score()` in `JobDB` does NOT commit — caller must call `db.conn.commit()` after a batch to avoid N commits in a loop.
+- `data/candidate_profile.json` must be filled in before `draft-message` produces useful output.
