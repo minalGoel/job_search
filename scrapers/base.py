@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import random
 from abc import ABC, abstractmethod
+from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 import structlog
@@ -50,8 +51,6 @@ class BaseScraper(ABC):
         Adds a random delay (2-5 s) before navigation to reduce
         fingerprinting risk, then waits for the network to settle.
         """
-        from pathlib import Path
-
         context = await self.bm.get_context(
             platform=self.name,
             cookies_dir=Path("cookies"),

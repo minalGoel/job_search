@@ -34,7 +34,7 @@ class Settings(BaseSettings):
     OUTREACH_DAILY_LIMIT: int = 25
     OUTREACH_SENDER_NAME: str = ""
     OUTREACH_SENDER_LINKEDIN: str = ""
-    OUTREACH_EXPERIENCE_YEARS: str = "6"
+    OUTREACH_EXPERIENCE_YEARS: int = 6
     OUTREACH_DOMAIN_EXPERTISE: str = "B2B SaaS"
     OUTREACH_ONE_LINE_PITCH: str = ""
 

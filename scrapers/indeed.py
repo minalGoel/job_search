@@ -7,8 +7,6 @@ from urllib.parse import urlencode
 
 import structlog
 from bs4 import BeautifulSoup
-from playwright.async_api import Page
-
 from models.job import Job
 from scrapers.base import BaseScraper
 
@@ -127,7 +125,7 @@ class IndeedScraper(BaseScraper):
                 if not (title and apply_link):
                     continue
 
-                description = await self._fetch_description(apply_link, page)
+                description = await self._fetch_description(apply_link)
 
                 jobs.append(
                     Job(
@@ -148,7 +146,7 @@ class IndeedScraper(BaseScraper):
         await page.close()
         return jobs
 
-    async def _fetch_description(self, url: str, parent_page: Page) -> str:
+    async def _fetch_description(self, url: str) -> str:
         if not url:
             return ""
         try:
