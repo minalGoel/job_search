@@ -44,6 +44,15 @@ class Job(BaseModel):
     scraped_at: datetime = Field(default_factory=datetime.now)
     is_duplicate: bool = False
     duplicate_of: Optional[str] = None
+    # Scoring fields (populated after scraping via scoring engine)
+    priority_score: int = 0
+    relevance_score: int = 0
+    salary_likelihood_score: int = 0
+    warmth_score: int = 0
+    company_quality_score: int = 0
+    priority_bucket: str = ""
+    score_reasons: list[str] = Field(default_factory=list)
+    priority_flags: list[str] = Field(default_factory=list)
 
     @model_validator(mode="after")
     def _compute_id(self) -> "Job":

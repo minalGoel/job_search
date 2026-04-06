@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import re
 import sys
 from datetime import datetime
 from pathlib import Path
@@ -364,6 +365,432 @@ def outreach_reply(
     from outreach.pipeline import mark_replied
 
     mark_replied(contact_id)
+
+
+
+# ------------------------------------------------------------------
+# P0: Scoring + Recommend
+# ------------------------------------------------------------------
+
+@app.command()
+def recommend(
+    top: int = typer.Option(25, "--top", "-n", help="Number of jobs to show"),
+    min_score: int = typer.Option(0, "--min-score", help="Minimum priority score"),
+    bucket: Optional[str] = typer.Option(None, "--bucket", "-b", help="Filter by bucket: must_apply|high|medium|low"),
+    platform: Optional[str] = typer.Option(None, "--platform", "-p", help="Filter by platform"),
+    remote_only: bool = typer.Option(False, "--remote-only", help="Only remote roles"),
+    include_low: bool = typer.Option(False, "--include-low", help="Include low-priority jobs"),
+    rescore: bool = typer.Option(False, "--rescore", help="Force rescore all jobs"),
+) -> None:
+    """Score and rank jobs, then print the top shortlist."""
+    _configure_logging()
+    from storage.db import JobDB
+    from services.scoring import score_job
+    from services.company_intel import build_company_profiles
+    import json
+
+    db = JobDB()
+    try:
+        # Refresh company intel first
+        typer.echo("Refreshing company intelligence cache...")
+        n_profiles = build_company_profiles(db)
+        typer.echo(f"  {n_profiles} company profiles indexed.\n")
+
+        company_profiles = db.get_all_company_profiles()
+
+        # Score unscored (or all if --rescore)
+        to_score = db.get_jobs_for_scoring(rescore_all=rescore)
+        if to_score:
+            typer.echo(f"Scoring {len(to_score)} job(s)...")
+            for job in to_score:
+                slug = re.sub(r"[^a-z0-9 ]", "", re.sub(r"\s+", " ", job.get("company", "").strip().lower()))
+                profile = company_profiles.get(slug)
+                scores = score_job(job, profile)
+                db.update_job_scores(job["id"], scores)
+            typer.echo(f"  Done.\n")
+
+        # Fetch ranked list
+        jobs = db.get_top_recommended_jobs(
+            top_n=top,
+            min_score=min_score,
+            bucket=bucket,
+            platform=platform,
+            remote_only=remote_only,
+            include_low=include_low,
+        )
+
+        if not jobs:
+            typer.echo("No jobs match the criteria. Try --include-low or lower --min-score.")
+            return
+
+        typer.echo(f"{'#':<3} {'Score':<6} {'Bucket':<12} {'Title':<38} {'Company':<28} {'Platform':<14} Reasons")
+        typer.echo("-" * 130)
+        for i, job in enumerate(jobs, 1):
+            reasons_raw = job.get("score_reasons") or "[]"
+            try:
+                reasons = json.loads(reasons_raw)
+            except Exception:
+                reasons = []
+            flags_raw = job.get("priority_flags") or "[]"
+            try:
+                flags = json.loads(flags_raw)
+            except Exception:
+                flags = []
+            reasons_str = ", ".join(reasons[:4])
+            flag_str = f"  ⚑ {', '.join(flags[:2])}" if flags else ""
+            typer.echo(
+                f"{i:<3} {job.get('priority_score', 0):<6} {job.get('priority_bucket', ''):<12} "
+                f"{job.get('title', '')[:37]:<38} {job.get('company', '')[:27]:<28} "
+                f"{job.get('platform', ''):<14} {reasons_str}{flag_str}"
+            )
+            typer.echo(f"    {job.get('apply_link', '')[:110]}")
+
+        # Export to CSV
+        import csv
+        from datetime import datetime as _dt
+        ts = _dt.now().strftime("%Y%m%d_%H%M%S")
+        settings.OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+        csv_path = settings.OUTPUT_DIR / f"recommended_jobs_{ts}.csv"
+        with open(csv_path, "w", newline="", encoding="utf-8") as f:
+            writer = csv.DictWriter(f, fieldnames=[
+                "priority_score", "priority_bucket", "title", "company",
+                "location", "platform", "score_reasons", "priority_flags",
+                "apply_link", "posted_date", "scraped_at",
+            ])
+            writer.writeheader()
+            for job in jobs:
+                writer.writerow({k: job.get(k, "") for k in writer.fieldnames})
+        typer.echo(f"\nExported {len(jobs)} jobs → {csv_path}")
+    finally:
+        db.close()
+
+
+@app.command(name="company-intel-refresh")
+def company_intel_refresh() -> None:
+    """Build/refresh company intelligence cache from local data."""
+    _configure_logging()
+    from storage.db import JobDB
+    from services.company_intel import build_company_profiles, enrich_from_funding_data
+
+    db = JobDB()
+    try:
+        typer.echo("Building company profiles from MNC registry, VC registry, and scraped jobs...")
+        n = build_company_profiles(db)
+        typer.echo(f"  {n} company profiles upserted.")
+
+        typer.echo("Enriching from funding scan data...")
+        n_funded = enrich_from_funding_data(db)
+        typer.echo(f"  {n_funded} companies marked as funded.")
+    finally:
+        db.close()
+
+
+# ------------------------------------------------------------------
+# P0: Connections import
+# ------------------------------------------------------------------
+
+@app.command(name="connections-import")
+def connections_import(
+    csv_path: str = typer.Argument(help="Path to LinkedIn connections export CSV"),
+    alumni_colleges: Optional[list[str]] = typer.Option(
+        None, "--alumni", "-a", help="College name(s) to mark contacts as alumni"
+    ),
+) -> None:
+    """Import LinkedIn connections CSV and match against scraped jobs."""
+    _configure_logging()
+    from pathlib import Path as _Path
+    from storage.db import JobDB
+    from services.connection_matcher import import_connections_csv, match_connections_to_jobs
+
+    csv_file = _Path(csv_path)
+    if not csv_file.exists():
+        typer.echo(f"File not found: {csv_path}", err=True)
+        raise typer.Exit(1)
+
+    db = JobDB()
+    try:
+        typer.echo(f"Importing contacts from {csv_path}...")
+        n_imported = import_connections_csv(csv_file, db, alumni_colleges or [])
+        typer.echo(f"  {n_imported} contacts imported/updated.")
+
+        typer.echo("Matching contacts to scraped jobs...")
+        n_matched = match_connections_to_jobs(db)
+        typer.echo(f"  {n_matched} jobs have warm connection(s).")
+        typer.echo("\nRun 'recommend' to see updated warmth scores.")
+    finally:
+        db.close()
+
+
+# ------------------------------------------------------------------
+# P1: Application tracker
+# ------------------------------------------------------------------
+
+@app.command(name="shortlist")
+def shortlist(
+    job_id: str = typer.Option(..., "--job-id", "-j", help="Job ID to shortlist"),
+    notes: Optional[str] = typer.Option(None, "--notes", "-n"),
+) -> None:
+    """Mark a job as shortlisted for application."""
+    _configure_logging()
+    import hashlib
+    from datetime import datetime as _dt
+    from storage.db import JobDB
+
+    db = JobDB()
+    try:
+        jobs = db.get_all_jobs()
+        job = next((j for j in jobs if j["id"] == job_id), None)
+        if not job:
+            typer.echo(f"Job {job_id!r} not found.", err=True)
+            raise typer.Exit(1)
+
+        app_id = hashlib.sha256(f"app|{job_id}".encode()).hexdigest()[:16]
+        now = _dt.now().isoformat()
+        db.upsert_application({
+            "id": app_id,
+            "job_id": job_id,
+            "company": job.get("company"),
+            "title": job.get("title"),
+            "status": "shortlisted",
+            "last_action_at": now,
+            "notes": notes,
+        })
+        typer.echo(f"Shortlisted: {job.get('title')} @ {job.get('company')}")
+    finally:
+        db.close()
+
+
+@app.command(name="apply-status")
+def apply_status_cmd(
+    job_id: str = typer.Option(..., "--job-id", "-j", help="Job ID"),
+    status: str = typer.Option(..., "--status", "-s",
+        help="Status: to_review|shortlisted|applied|reached_out|interviewing|rejected|offer|parked"),
+    notes: Optional[str] = typer.Option(None, "--notes", "-n"),
+) -> None:
+    """Update the application status for a job."""
+    _configure_logging()
+    from storage.db import JobDB
+
+    valid = {"to_review", "shortlisted", "applied", "reached_out", "interviewing", "rejected", "offer", "parked"}
+    if status not in valid:
+        typer.echo(f"Invalid status '{status}'. Choose from: {', '.join(sorted(valid))}", err=True)
+        raise typer.Exit(1)
+
+    db = JobDB()
+    try:
+        updated = db.update_application_status(job_id, status, notes)
+        if updated:
+            typer.echo(f"Updated job {job_id} → {status}")
+        else:
+            typer.echo(f"No application found for job {job_id}. Use 'shortlist' first.", err=True)
+    finally:
+        db.close()
+
+
+@app.command(name="pipeline-status")
+def pipeline_status() -> None:
+    """Show application pipeline summary."""
+    _configure_logging()
+    from storage.db import JobDB
+
+    db = JobDB()
+    try:
+        stats = db.get_pipeline_stats()
+        typer.echo("\n=== Job Search Pipeline ===")
+        typer.echo(f"  Total jobs (non-duplicate): {stats['total_jobs']}")
+        typer.echo(f"  Scored jobs:                {stats['scored_jobs']}")
+        typer.echo(f"\n  By bucket:")
+        for b in ("must_apply", "high", "medium", "low"):
+            typer.echo(f"    {b:<14} {stats.get(f'bucket_{b}', 0)}")
+        typer.echo(f"\n  Applications: {stats['total_applications']}")
+        for s, n in (stats.get("applications_by_status") or {}).items():
+            typer.echo(f"    {s:<16} {n}")
+        typer.echo(f"\n  Network contacts: {stats['network_contacts']}")
+        typer.echo(f"  Company profiles: {stats['company_profiles']}")
+    finally:
+        db.close()
+
+
+# ------------------------------------------------------------------
+# P1: Daily action queue
+# ------------------------------------------------------------------
+
+@app.command()
+def today() -> None:
+    """Print today's action queue: what to apply to, reach out to, follow up on."""
+    _configure_logging()
+    from storage.db import JobDB
+    from services.scoring import score_job
+    import json
+    from datetime import datetime as _dt, timedelta
+
+    db = JobDB()
+    try:
+        # Ensure scoring is up to date
+        to_score = db.get_jobs_for_scoring(rescore_all=False)
+        if to_score:
+            company_profiles = db.get_all_company_profiles()
+            for job in to_score:
+                slug = re.sub(r"[^a-z0-9 ]", "", re.sub(r"\s+", " ", job.get("company", "").strip().lower()))
+                profile = company_profiles.get(slug)
+                scores = score_job(job, profile)
+                db.update_job_scores(job["id"], scores)
+
+        typer.echo("\n" + "=" * 60)
+        typer.echo("TODAY'S JOB SEARCH ACTION QUEUE")
+        typer.echo("=" * 60)
+
+        # 1. Top jobs to apply now
+        typer.echo("\n[ TOP 5 TO APPLY NOW ]")
+        top_jobs = db.get_top_recommended_jobs(top_n=5, bucket=None, include_low=False)
+        must_high = [j for j in top_jobs if j.get("priority_bucket") in ("must_apply", "high")]
+        if must_high:
+            for j in must_high[:5]:
+                typer.echo(f"  [{j.get('priority_score',0):>3}] {j.get('title','')[:40]:40} @ {j.get('company','')[:25]:25} ({j.get('platform','')})")
+                typer.echo(f"       {j.get('apply_link','')[:90]}")
+        else:
+            typer.echo("  None scored as must_apply/high yet. Run 'recommend' first.")
+
+        # 2. Warm leads
+        typer.echo("\n[ TOP 3 WARM LEADS ]")
+        all_jobs = db.get_all_jobs()
+        warm_jobs = sorted(
+            [j for j in all_jobs if (j.get("warmth_score") or 0) > 0 and not j.get("is_duplicate")],
+            key=lambda j: j.get("warmth_score", 0),
+            reverse=True,
+        )[:3]
+        if warm_jobs:
+            for j in warm_jobs:
+                matches = db.get_connection_matches_for_job(j["id"])
+                contact_names = ", ".join(m.get("contact_name", "") for m in matches[:2])
+                typer.echo(f"  [warmth={j.get('warmth_score',0)}] {j.get('title','')[:38]:38} @ {j.get('company','')}")
+                typer.echo(f"    Connections: {contact_names or '(unknown)'}")
+        else:
+            typer.echo("  No warm connections matched yet. Run 'connections-import'.")
+
+        # 3. Follow-ups due
+        typer.echo("\n[ FOLLOW-UPS DUE ]")
+        apps = db.get_applications()
+        cutoff = (_dt.now() - timedelta(days=3)).isoformat()
+        due = [
+            a for a in apps
+            if a.get("status") in ("applied", "reached_out")
+            and (a.get("last_action_at") or "") < cutoff
+        ]
+        if due:
+            for a in due[:3]:
+                typer.echo(f"  {a.get('status',''):<14} {a.get('title','')[:38]:38} @ {a.get('company','')}")
+                typer.echo(f"    Last action: {a.get('last_action_at','')[:10]}")
+        else:
+            typer.echo("  No follow-ups overdue.")
+
+        # 4. Stale applications to review
+        typer.echo("\n[ SHORTLISTED BUT NOT APPLIED ]")
+        shortlisted = [a for a in apps if a.get("status") == "shortlisted"]
+        if shortlisted:
+            for a in shortlisted[:3]:
+                typer.echo(f"  {a.get('title','')[:45]:45} @ {a.get('company','')}")
+        else:
+            typer.echo("  None.")
+
+        typer.echo("\n" + "=" * 60)
+        typer.echo("Run 'recommend' for full ranked list | 'pipeline-status' for stats")
+        typer.echo("=" * 60 + "\n")
+    finally:
+        db.close()
+
+
+# ------------------------------------------------------------------
+# P1: Draft message
+# ------------------------------------------------------------------
+
+@app.command(name="draft-message")
+def draft_message_cmd(
+    job_id: str = typer.Option(..., "--job-id", "-j", help="Job ID to draft message for"),
+    msg_type: str = typer.Option("recruiter", "--type", "-t",
+        help="Message type: recruiter|hiring-manager|funded-startup|warm-intro"),
+    contact_name: str = typer.Option("", "--contact", "-c", help="Recipient name"),
+    mutual_name: str = typer.Option("", "--mutual", help="Mutual connection name (warm-intro)"),
+    funding_context: str = typer.Option("", "--funding", help="Funding context, e.g. 'Series B'"),
+    save: bool = typer.Option(False, "--save", help="Save draft to output/drafts/"),
+) -> None:
+    """Generate a tailored recruiter/hiring-manager outreach message for a job."""
+    _configure_logging()
+    from storage.db import JobDB
+    from services.outreach_writer import draft_message
+    from datetime import datetime as _dt
+
+    db = JobDB()
+    try:
+        all_jobs = db.get_all_jobs()
+        job = next((j for j in all_jobs if j["id"] == job_id), None)
+        if not job:
+            typer.echo(f"Job {job_id!r} not found.", err=True)
+            raise typer.Exit(1)
+
+        typer.echo(f"\nDrafting '{msg_type}' message for: {job.get('title')} @ {job.get('company')}\n")
+        typer.echo("-" * 60)
+
+        message = draft_message(
+            job=job,
+            message_type=msg_type,
+            contact_name=contact_name,
+            mutual_name=mutual_name,
+            funding_context=funding_context,
+        )
+        typer.echo(message)
+        typer.echo("-" * 60)
+
+        if save:
+            drafts_dir = settings.OUTPUT_DIR / "drafts"
+            drafts_dir.mkdir(parents=True, exist_ok=True)
+            ts = _dt.now().strftime("%Y%m%d_%H%M%S")
+            safe_co = re.sub(r"[^a-z0-9]", "_", job.get("company", "company").lower())
+            draft_path = drafts_dir / f"{ts}_{msg_type}_{safe_co}.txt"
+            draft_path.write_text(message, encoding="utf-8")
+            typer.echo(f"\nSaved to {draft_path}")
+    finally:
+        db.close()
+
+
+# ------------------------------------------------------------------
+# P2: Analytics
+# ------------------------------------------------------------------
+
+@app.command()
+def analytics() -> None:
+    """Show source quality stats and conversion analytics."""
+    _configure_logging()
+    from storage.db import JobDB
+
+    db = JobDB()
+    try:
+        typer.echo("\n=== Source Quality ===")
+        source_stats = db.get_source_quality_stats()
+        typer.echo(f"{'Platform':<18} {'Total':<8} {'Avg Score':<12} {'High Quality'}")
+        typer.echo("-" * 55)
+        for row in source_stats:
+            typer.echo(
+                f"{row['platform']:<18} {row['total']:<8} "
+                f"{row['avg_score'] or 0:>6.1f}      {row['high_quality']}"
+            )
+
+        typer.echo("\n=== Pipeline Stats ===")
+        stats = db.get_pipeline_stats()
+        typer.echo(f"  Total jobs:   {stats['total_jobs']}")
+        typer.echo(f"  Scored:       {stats['scored_jobs']}")
+        for b in ("must_apply", "high", "medium", "low"):
+            typer.echo(f"  {b:<14} {stats.get(f'bucket_{b}', 0)}")
+
+        typer.echo("\n=== Applications ===")
+        apps_by_status = stats.get("applications_by_status") or {}
+        if apps_by_status:
+            for s, n in apps_by_status.items():
+                typer.echo(f"  {s:<16} {n}")
+        else:
+            typer.echo("  No applications tracked yet.")
+    finally:
+        db.close()
 
 
 if __name__ == "__main__":
