@@ -135,8 +135,14 @@ class JobDB:
         if not row:
             return None
         d = dict(row)
-        d["platforms_scraped"] = json.loads(d["platforms_scraped"])
-        d["errors"] = json.loads(d["errors"])
+        try:
+            d["platforms_scraped"] = json.loads(d["platforms_scraped"] or "[]")
+        except json.JSONDecodeError:
+            d["platforms_scraped"] = []
+        try:
+            d["errors"] = json.loads(d["errors"] or "{}")
+        except json.JSONDecodeError:
+            d["errors"] = {}
         return d
 
     # ------------------------------------------------------------------

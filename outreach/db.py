@@ -303,7 +303,7 @@ class OutreachDB:
         self.conn.commit()
 
     def get_monthly_credits(self, provider: str) -> int:
-        month_start = datetime.now().replace(day=1).isoformat()
+        month_start = datetime.now().replace(day=1, hour=0, minute=0, second=0, microsecond=0).isoformat()
         row = self.conn.execute(
             "SELECT COALESCE(SUM(credits_used), 0) FROM outreach_credits WHERE provider = ? AND timestamp >= ?",
             (provider, month_start),
