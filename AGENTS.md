@@ -26,6 +26,8 @@ This is a Python async CLI tool for aggregating PM job listings across 14 platfo
 - Always close pages after use: `await page.close()`
 - Handle errors per-card (try/except inside the loop), log and continue
 - Parse relative dates ("2 days ago") with a `_parse_relative_date()` helper
+- **Never hardcode search queries** — always use `self.search_params.title_keywords[0]` so the scraper respects SearchParams
+- **Guard `_get_page` failures**: wrap `page.goto()` in try/except and call `await page.close()` before re-raising, to prevent browser resource leaks
 
 **Anti-scraping considerations**:
 - LinkedIn: guest mode, 3-7s delays, max 3 pages, check for `authwall` redirect
@@ -128,7 +130,9 @@ This is a Python async CLI tool for aggregating PM job listings across 14 platfo
 6. **Selector fragility**: CSS selectors in scrapers WILL break when sites update. Use multiple fallback selectors with `or` chains: `soup.select("div.new-class") or soup.select("div.old-class")`
 7. **Two separate databases**: Jobs in `output/jobs.db` (via `storage/db.py`), outreach in `output/outreach.db` (via `outreach/db.py`). Don't mix them.
 8. **Apollo Search vs Enrich**: Search does NOT return emails. Always follow up with Enrich endpoint for each contact.
-9. **HTML escaping**: Use `html.escape()` for all user-supplied data in HTML output (reviewer, notifier). The notifier was updated to use escape().
+9. **HTML escaping**: Use `html.escape()` for all user-supplied data in HTML output (reviewer, notifier).
+10. **Search query**: Each scraper must pass `self.search_params.title_keywords[0]` as the search term — never a hardcoded string. Hardcoding silently ignores user config.
+11. **Contact name extraction**: Use `.strip()` before `.split()[0]` when extracting first name from contact names — whitespace-only strings will cause IndexError otherwise.
 
 ## Testing Approach
 
