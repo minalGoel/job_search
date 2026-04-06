@@ -1,0 +1,16 @@
+playwright>=1.40
+playwright-stealth>=1.0
+beautifulsoup4>=4.12
+lxml>=4.9
+pydantic>=2.5
+pydantic-settings>=2.1
+apscheduler>=3.10
+openpyxl>=3.1
+typer>=0.9
+structlog>=23.0
+python-dotenv>=1.0
+httpx>=0.25
+rapidfuzz>=3.5
+google-api-python-client>=2.100
+google-auth-httplib2>=0.2
+google-auth-oauthlib>=1.2
