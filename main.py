@@ -385,7 +385,7 @@ def recommend(
     """Score and rank jobs, then print the top shortlist."""
     _configure_logging()
     from storage.db import JobDB
-    from services.scoring import score_job
+    from services.scoring import score_job, _company_slug
     from services.company_intel import build_company_profiles
     import json
 
@@ -403,8 +403,7 @@ def recommend(
         if to_score:
             typer.echo(f"Scoring {len(to_score)} job(s)...")
             for job in to_score:
-                slug = re.sub(r"[^a-z0-9 ]", "", re.sub(r"\s+", " ", job.get("company", "").strip().lower()))
-                profile = company_profiles.get(slug)
+                profile = company_profiles.get(_company_slug(job.get("company", "")))
                 scores = score_job(job, profile)
                 db.update_job_scores(job["id"], scores)
             typer.echo(f"  Done.\n")
@@ -538,8 +537,7 @@ def shortlist(
 
     db = JobDB()
     try:
-        jobs = db.get_all_jobs()
-        job = next((j for j in jobs if j["id"] == job_id), None)
+        job = db.get_job_by_id(job_id)
         if not job:
             typer.echo(f"Job {job_id!r} not found.", err=True)
             raise typer.Exit(1)
@@ -620,7 +618,7 @@ def today() -> None:
     """Print today's action queue: what to apply to, reach out to, follow up on."""
     _configure_logging()
     from storage.db import JobDB
-    from services.scoring import score_job
+    from services.scoring import score_job, _company_slug
     import json
     from datetime import datetime as _dt, timedelta
 
@@ -631,8 +629,7 @@ def today() -> None:
         if to_score:
             company_profiles = db.get_all_company_profiles()
             for job in to_score:
-                slug = re.sub(r"[^a-z0-9 ]", "", re.sub(r"\s+", " ", job.get("company", "").strip().lower()))
-                profile = company_profiles.get(slug)
+                profile = company_profiles.get(_company_slug(job.get("company", "")))
                 scores = score_job(job, profile)
                 db.update_job_scores(job["id"], scores)
 
@@ -722,8 +719,7 @@ def draft_message_cmd(
 
     db = JobDB()
     try:
-        all_jobs = db.get_all_jobs()
-        job = next((j for j in all_jobs if j["id"] == job_id), None)
+        job = db.get_job_by_id(job_id)
         if not job:
             typer.echo(f"Job {job_id!r} not found.", err=True)
             raise typer.Exit(1)

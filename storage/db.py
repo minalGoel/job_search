@@ -210,19 +210,36 @@ class JobDB:
     # Scoring methods
     # ------------------------------------------------------------------
 
+    def get_job_by_id(self, job_id: str) -> Optional[dict]:
+        """Return a single job dict by ID, or None if not found."""
+        row = self.conn.execute("SELECT * FROM jobs WHERE id = ?", (job_id,)).fetchone()
+        return self._row_to_dict(row) if row else None
+
     def get_jobs_for_scoring(self, rescore_all: bool = False) -> list[dict]:
-        """Return jobs that need (re)scoring."""
+        """Return jobs that need (re)scoring.
+
+        A job is considered unscored when priority_bucket is empty ('').
+        We deliberately do NOT use priority_score = 0 as the condition because
+        a legitimately poor-signal job can score 0 and should not be rescored
+        on every call.
+        """
         if rescore_all:
             rows = self.conn.execute(
                 "SELECT * FROM jobs WHERE is_duplicate = 0 ORDER BY scraped_at DESC"
             ).fetchall()
         else:
             rows = self.conn.execute(
-                """SELECT * FROM jobs
-                   WHERE is_duplicate = 0 AND (priority_score = 0 OR priority_bucket = '')
-                   ORDER BY scraped_at DESC"""
+                "SELECT * FROM jobs WHERE is_duplicate = 0 AND priority_bucket = '' ORDER BY scraped_at DESC"
             ).fetchall()
         return [self._row_to_dict(r) for r in rows]
+
+    def update_job_warmth_score(self, job_id: str, warmth: int) -> None:
+        """Update only the warmth_score for a single job (called by connection_matcher)."""
+        self.conn.execute(
+            "UPDATE jobs SET warmth_score = ? WHERE id = ?",
+            (warmth, job_id),
+        )
+        # Caller is responsible for commit (batch updates use this)
 
     def update_job_scores(self, job_id: str, scores: dict) -> None:
         """Persist scoring results for a single job."""
@@ -449,12 +466,24 @@ class JobDB:
         return [dict(r) for r in rows]
 
     def get_contacts_for_company(self, company_slug: str) -> list[dict]:
-        rows = self.conn.execute(
-            """SELECT * FROM network_contacts
-               WHERE LOWER(REPLACE(REPLACE(company, '.', ''), ',', '')) LIKE ?""",
-            (f"%{company_slug}%",),
-        ).fetchall()
-        return [dict(r) for r in rows]
+        """Return contacts whose normalised company slug contains or equals company_slug.
+
+        Matching is done in Python (not SQL) for consistency with the normalisation
+        logic in services/connection_matcher.py.
+        """
+        all_contacts = self.get_network_contacts()
+        import re as _re
+
+        def _slug(name: str) -> str:
+            s = _re.sub(r"[^a-z0-9 ]", "", name.strip().lower())
+            return _re.sub(r"\s+", " ", s).strip()
+
+        result = []
+        for c in all_contacts:
+            slug = _slug(c.get("company", ""))
+            if slug and (slug == company_slug or company_slug in slug or slug in company_slug):
+                result.append(c)
+        return result
 
     def upsert_job_connection_match(self, match: dict) -> None:
         self.conn.execute(

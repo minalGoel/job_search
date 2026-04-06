@@ -206,10 +206,7 @@ def match_connections_to_jobs(db: "JobDB") -> int:
 
         if best_warmth > 0:
             # Update warmth_score on the job; re-scoring will incorporate it
-            db.conn.execute(
-                "UPDATE jobs SET warmth_score = ? WHERE id = ?",
-                (best_warmth, job["id"]),
-            )
+            db.update_job_warmth_score(job_id=job["id"], warmth=best_warmth)
             updated += 1
 
     db.conn.commit()

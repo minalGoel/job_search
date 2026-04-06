@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 import re
-from datetime import date, datetime
+from datetime import date
 from typing import Optional
 
 from config.scoring_rules import (
@@ -254,11 +254,6 @@ def score_job(job: dict, company_profile: Optional[dict] = None) -> dict:
 
     if loc_match and "remote" in location:
         reasons.append("remote_friendly")
-
-    if company_profile and company_profile.get("is_funded"):
-        reasons.append("funded_company")
-        if "funded_company" not in flags:
-            flags = [f for f in flags]  # no-op to keep list
 
     # Deduplicate while preserving order
     reasons = list(dict.fromkeys(reasons))

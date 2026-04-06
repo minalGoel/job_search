@@ -15,7 +15,7 @@ No paid APIs are used in this module.
 import re
 import urllib.parse
 from datetime import datetime
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Optional
 
 if TYPE_CHECKING:
     from storage.db import JobDB
@@ -153,42 +153,78 @@ def build_company_profiles(db: "JobDB") -> int:
     return len(profiles)
 
 
-def enrich_from_funding_data(db: "JobDB") -> int:
+def enrich_from_funding_data(db: "JobDB", output_dir: Optional[str] = None) -> int:
     """
-    Cross-reference company_profiles with funding info stored as jobs
-    from the funding scanner (platform = 'funding_scanner').
+    Cross-reference company_profiles with data from the most recent
+    funded_companies_*.csv produced by the funding scanner.
+
+    The funding scanner writes results to CSV (not to jobs.db), so this
+    function reads the latest CSV from the output directory.
+
     Returns the number of profiles updated.
     """
+    import csv
+    from pathlib import Path
+
+    if output_dir is None:
+        output_dir = str(Path(__file__).resolve().parent.parent / "output")
+
+    output_path = Path(output_dir)
+    # Find the most recently written funding CSV
+    csvs = sorted(output_path.glob("funded_companies_*.csv"), reverse=True)
+    if not csvs:
+        return 0
+
+    latest_csv = csvs[0]
     updated = 0
-    all_jobs = db.get_all_jobs()
-    funding_jobs = [j for j in all_jobs if j.get("platform") == "funding_scanner"]
 
-    for fjob in funding_jobs:
-        slug = _company_slug(fjob.get("company", ""))
-        if not slug:
-            continue
-        profile = db.get_company_profile(slug)
-        if not profile:
-            profile = {
-                "normalized_company": slug,
-                "company_display_name": fjob.get("company", ""),
-                "is_funded": 1,
-                "last_refreshed_at": datetime.now().isoformat(),
-            }
-        else:
+    # CSV columns (from funding/exporter.py):
+    # Company, Founder/CEO, Industry, HQ Location, Delhi NCR Office,
+    # Last Round (Date & Series), Amt Raised, Source, Work Mode,
+    # LinkedIn PM Roles, LinkedIn Jobs URL, Careers Page
+    with open(latest_csv, newline="", encoding="utf-8") as f:
+        reader = csv.DictReader(f)
+        for row in reader:
+            company_name = (row.get("Company") or "").strip()
+            if not company_name:
+                continue
+
+            slug = _company_slug(company_name)
+            if not slug:
+                continue
+
+            round_text = _normalize(row.get("Last Round (Date & Series)") or "")
+            funding_series: Optional[str] = None
+            for series in ["series d", "series c", "series b", "series a", "seed", "pre-seed"]:
+                if series in round_text:
+                    funding_series = series.title()
+                    break
+
+            # Extract date portion (format: "Jan 01, 2024 – Series B")
+            funding_date: Optional[str] = None
+            import re as _re
+            date_match = _re.search(r"([A-Z][a-z]{2}\s+\d{1,2},\s+\d{4})", row.get("Last Round (Date & Series)") or "")
+            if date_match:
+                funding_date = date_match.group(1)
+
+            profile = db.get_company_profile(slug)
+            if not profile:
+                profile = {
+                    "normalized_company": slug,
+                    "company_display_name": company_name,
+                    "last_refreshed_at": datetime.now().isoformat(),
+                }
             profile["is_funded"] = 1
+            if funding_series:
+                profile["funding_series"] = funding_series
+            if funding_date:
+                profile["funding_date"] = funding_date
+            if row.get("Careers Page"):
+                profile.setdefault("careers_page", row["Careers Page"].strip() or None)
+            if row.get("HQ Location"):
+                profile.setdefault("hq_location", row["HQ Location"].strip())
 
-        # Try to extract series from salary field (funding scanner stores amount there)
-        salary_text = _normalize(fjob.get("salary") or "")
-        for series in ["series d", "series c", "series b", "series a", "seed", "pre-seed"]:
-            if series in salary_text or series in _normalize(fjob.get("description") or ""):
-                profile["funding_series"] = series.title()
-                break
-
-        if fjob.get("posted_date"):
-            profile["funding_date"] = str(fjob["posted_date"])
-
-        db.upsert_company_profile(profile)
-        updated += 1
+            db.upsert_company_profile(profile)
+            updated += 1
 
     return updated
