@@ -80,7 +80,8 @@ class CutshortScraper(BaseScraper):
 
         await asyncio.sleep(3)
 
-        # Scroll to load more results
+        # Scroll to load more results; break early if content stops growing
+        prev_height: int = 0
         for load in range(MAX_LOADS):
             await page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
             await asyncio.sleep(2)
@@ -92,6 +93,12 @@ class CutshortScraper(BaseScraper):
             if load_more:
                 await load_more.click()
                 await asyncio.sleep(2)
+            # Stop early if the page height stopped growing (no new content)
+            curr_height: int = await page.evaluate("document.body.scrollHeight")
+            if curr_height == prev_height:
+                self._log.debug("scroll.converged", load=load)
+                break
+            prev_height = curr_height
 
         # Try API data first
         if captured_api:

@@ -134,7 +134,7 @@ class WeekdayScraper(BaseScraper):
                     posted_text = item.get("postedDate", "") or item.get("createdAt", "")
                     posted_date = _parse_relative_date(str(posted_text))
 
-                    if title and company:
+                    if title and company and apply_link:
                         jobs.append(
                             Job(
                                 platform="weekday",
@@ -145,7 +145,7 @@ class WeekdayScraper(BaseScraper):
                                 posted_date=posted_date,
                                 skills=[s for s in skills if isinstance(s, str) and s],
                                 description=description,
-                                apply_link=apply_link or url,
+                                apply_link=apply_link,
                             )
                         )
                 except Exception:

@@ -159,3 +159,6 @@ Key rules:
 - Never commit `.env`, `cookies/`, or `credentials/` (contains credentials and session tokens)
 - The `from __future__ import annotations` import is required everywhere for Python 3.9 compatibility
 - Playwright stealth is v2 API: `Stealth().apply_stealth(context)` -- do NOT use the old `stealth_async` function
+- Every scraper MUST use `self.search_params.title_keywords[0]` (not hardcoded strings) for its search query
+- `OUTREACH_EXPERIENCE_YEARS` is typed as `int` in Settings; `.env` value is coerced automatically by pydantic-settings
+- `_get_page()` in vc_portals and mnc_careers scrapers closes the page on `goto` failure -- follow this pattern in new scrapers too

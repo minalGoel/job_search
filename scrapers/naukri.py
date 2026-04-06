@@ -105,7 +105,7 @@ class NaukriScraper(BaseScraper):
         # --- Strategy 1: Parse captured JSON API responses ---
         if captured_responses:
             self._log.info("api.captured", count=len(captured_responses))
-            jobs = self._parse_api_response(captured_responses, page)
+            jobs = self._parse_api_response(captured_responses)
             if jobs:
                 await page.close()
                 return jobs
@@ -118,7 +118,7 @@ class NaukriScraper(BaseScraper):
         return jobs
 
     def _parse_api_response(
-        self, responses: list[dict[str, Any]], page: Page
+        self, responses: list[dict[str, Any]]
     ) -> list[Job]:
         jobs: list[Job] = []
         for resp in responses:
@@ -207,7 +207,7 @@ class NaukriScraper(BaseScraper):
                     continue
 
                 # Fetch full description from individual job page
-                description = await self._fetch_description(apply_link, page)
+                description = await self._fetch_description(apply_link)
 
                 jobs.append(
                     Job(
@@ -226,7 +226,7 @@ class NaukriScraper(BaseScraper):
                 self._log.exception("html.card_parse_failed")
         return jobs
 
-    async def _fetch_description(self, url: str, page: Page) -> str:
+    async def _fetch_description(self, url: str) -> str:
         """Navigate to a job detail page and extract the description."""
         if not url:
             return ""

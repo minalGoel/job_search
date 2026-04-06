@@ -1,7 +1,8 @@
 from __future__ import annotations
 
 import asyncio
-import re
+from pathlib import Path
+from urllib.parse import urljoin
 
 import structlog
 from bs4 import BeautifulSoup
@@ -102,7 +103,6 @@ class MNCCareerScraper:
                     link_el = el.select_one("a[href]") or (el if el.name == "a" else None)
                     href = link_el.get("href", "") if link_el else ""
                     if href and not href.startswith("http"):
-                        from urllib.parse import urljoin
                         href = urljoin(mnc.pm_search_url, href)
 
                     # Extract location
@@ -135,8 +135,11 @@ class MNCCareerScraper:
         return jobs
 
     async def _get_page(self, url: str) -> Page:
-        from pathlib import Path
         context = await self.bm.get_context("mnc_careers", Path("cookies"))
         page = await context.new_page()
-        await page.goto(url, wait_until="domcontentloaded", timeout=30_000)
+        try:
+            await page.goto(url, wait_until="domcontentloaded", timeout=30_000)
+        except Exception:
+            await page.close()
+            raise
         return page

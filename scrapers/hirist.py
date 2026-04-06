@@ -46,7 +46,7 @@ class HiristScraper(BaseScraper):
     def _build_search_url(self, page_num: int = 1) -> str:
         sp = self.search_params
         params: dict[str, str] = {
-            "q": "product manager",
+            "q": sp.title_keywords[0],
             "loc": sp.location,
         }
         if sp.min_ctc_lpa:

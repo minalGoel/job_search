@@ -46,9 +46,9 @@ class RemoteOKScraper(BaseScraper):
 
                 company = item.get("company", "")
                 location = item.get("location", "Remote")
-                salary_min = item.get("salary_min", "")
-                salary_max = item.get("salary_max", "")
-                salary = f"${salary_min} - ${salary_max}" if salary_min else None
+                salary_min = item.get("salary_min")
+                salary_max = item.get("salary_max")
+                salary = f"${salary_min} - ${salary_max}" if salary_min is not None and salary_max is not None else None
 
                 tags = item.get("tags", [])
                 if isinstance(tags, list):

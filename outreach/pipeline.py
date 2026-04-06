@@ -41,6 +41,7 @@ async def run_enrich(settings: Settings) -> None:
         if not contact.get("contact_email"):
             continue
         emails = generate_sequence(contact, settings)
+        inserted = 0
         for i, email in enumerate(emails):
             # Schedule follow-ups relative to now
             if i == 0:
@@ -52,8 +53,10 @@ async def run_enrich(settings: Settings) -> None:
 
             if db.insert_email(email):
                 draft_count += 1
+                inserted += 1
 
-        db.update_contact_status(contact["id"], "queued")
+        if inserted:
+            db.update_contact_status(contact["id"], "queued")
 
     log.info("pipeline.drafts_generated", count=draft_count)
     print(f"\n  Enriched contacts: {job_count + (fund_count if funded_companies else 0)}")

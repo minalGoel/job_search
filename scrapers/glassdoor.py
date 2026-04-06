@@ -71,6 +71,7 @@ class GlassdoorScraper(BaseScraper):
             return []
 
         await asyncio.sleep(3)
+        # Re-fetch after sleep so JS-rendered content is included
         html = await page.content()
         soup = BeautifulSoup(html, "html.parser")
         jobs: list[Job] = []

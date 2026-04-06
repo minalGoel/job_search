@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import re
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 from urllib.parse import urlencode
 
 import structlog
@@ -41,7 +41,7 @@ def _parse_relative_date(text: str) -> date | None:
     # Try absolute date like "03 Apr 2026"
     for fmt in ("%d %b %Y", "%d %B %Y", "%b %d, %Y"):
         try:
-            return date.fromisoformat(str(__import__("datetime").datetime.strptime(text, fmt).date()))
+            return datetime.strptime(text, fmt).date()
         except ValueError:
             continue
     return None

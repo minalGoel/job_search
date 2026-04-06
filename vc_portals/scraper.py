@@ -2,7 +2,8 @@ from __future__ import annotations
 
 import asyncio
 import re
-from datetime import date, timedelta
+from pathlib import Path
+from urllib.parse import urljoin
 
 import structlog
 from bs4 import BeautifulSoup
@@ -79,8 +80,6 @@ class VCPortalScraper:
                 link_el = el.select_one("a[href]") or (el if el.name == "a" else None)
                 href = link_el.get("href", "") if link_el else ""
                 if href and not href.startswith("http"):
-                    # Build absolute URL from portal base
-                    from urllib.parse import urljoin
                     href = urljoin(vc.job_portal_url, href)
 
                 # Extract company (for portfolio job boards, company is in the listing)
@@ -117,8 +116,11 @@ class VCPortalScraper:
         return jobs
 
     async def _get_page(self, url: str) -> Page:
-        from pathlib import Path
         context = await self.bm.get_context("vc_portals", Path("cookies"))
         page = await context.new_page()
-        await page.goto(url, wait_until="domcontentloaded", timeout=30_000)
+        try:
+            await page.goto(url, wait_until="domcontentloaded", timeout=30_000)
+        except Exception:
+            await page.close()
+            raise
         return page

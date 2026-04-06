@@ -76,7 +76,8 @@ def render_email(
         return None
 
     # Build variable map
-    first_name = (contact.get("contact_name") or "").split()[0] if contact.get("contact_name") else "there"
+    _name = (contact.get("contact_name") or "").strip()
+    first_name = _name.split()[0] if _name else "there"
     job_title = contact.get("source_job_title") or "Product Manager"
     funding_context = _build_funding_context(
         contact.get("funding_series", ""),
