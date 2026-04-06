@@ -43,7 +43,32 @@ class BrowserManager:
         """Launch the Playwright Chromium browser."""
         log.info("browser.starting", headless=self._headless)
         self._playwright = await async_playwright().start()
-        self._browser = await self._playwright.chromium.launch(headless=self._headless)
+        base_args = [
+            "--disable-blink-features=AutomationControlled",
+            "--no-sandbox",
+            "--disable-setuid-sandbox",
+            "--disable-dev-shm-usage",
+            "--disable-accelerated-2d-canvas",
+            "--no-first-run",
+            "--no-zygote",
+            "--disable-gpu",
+            "--window-size=1280,800",
+            "--disable-extensions",
+            "--disable-infobars",
+        ]
+        if self._headless:
+            # Use Chrome's new headless mode: launch as "headed" but pass --headless=new.
+            # This is much harder for Akamai/bot-detection to identify vs the old headless mode.
+            self._browser = await self._playwright.chromium.launch(
+                headless=False,
+                args=base_args + ["--headless=new"],
+            )
+        else:
+            # Headed mode (used for manual logins): show a real browser window
+            self._browser = await self._playwright.chromium.launch(
+                headless=False,
+                args=base_args,
+            )
         log.info("browser.started")
 
     async def stop(self) -> None:
@@ -97,7 +122,7 @@ class BrowserManager:
 
         context = await self._browser.new_context(**kwargs)
         stealth = Stealth()
-        await stealth.apply_stealth(context)
+        await stealth.apply_stealth_async(context)
 
         self._contexts[platform] = context
         log.info("browser.context.created", platform=platform, user_agent=user_agent)

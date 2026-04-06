@@ -81,26 +81,33 @@ class NaukriScraper(BaseScraper):
 
     async def _scrape_page(self, url: str, page_num: int) -> list[Job]:
         """Try the XHR JSON API first, fall back to HTML parsing."""
+        import random
+        from pathlib import Path
         captured_responses: list[dict[str, Any]] = []
 
         async def _intercept(response: Response) -> None:
-            if "jobapi" in response.url and response.status == 200:
+            resp_url = response.url
+            if response.status == 200 and (
+                "jobapi" in resp_url or "naukri.com/jobapi" in resp_url
+                or ("naukri.com" in resp_url and "search" in resp_url)
+            ):
                 try:
                     body = await response.json()
-                    captured_responses.append(body)
+                    if isinstance(body, dict) and body.get("jobDetails"):
+                        captured_responses.append(body)
                 except Exception:
                     pass
 
-        page = await self._get_page(url)
+        # Register listener BEFORE navigation so we catch the first load
+        context = await self.bm.get_context(self.name, Path("cookies"))
+        page = await context.new_page()
         page.on("response", _intercept)
-
-        # Reload so we can capture XHR requests that already fired
+        await asyncio.sleep(random.uniform(2.0, 4.0))
         try:
-            await page.reload(wait_until="networkidle", timeout=15_000)
+            await page.goto(url, wait_until="domcontentloaded", timeout=20_000)
         except Exception:
-            self._log.debug("page.reload_timeout", page=page_num)
-
-        await asyncio.sleep(3)
+            self._log.debug("page.goto_timeout", page=page_num)
+        await asyncio.sleep(4)
 
         # --- Strategy 1: Parse captured JSON API responses ---
         if captured_responses:
@@ -172,35 +179,36 @@ class NaukriScraper(BaseScraper):
         jobs: list[Job] = []
 
         # Naukri uses article tags or divs with class containing 'jobTuple'
-        cards = soup.select("article.jobTuple") or soup.select(
-            "div.srp-jobtuple-wrapper"
-        ) or soup.select("div[class*='jobTuple']")
-
-        if not cards:
-            # Try the newer card layout
-            cards = soup.select("div.cust-job-tuple")
+        # Confirmed live selectors (April 2026)
+        cards = (
+            soup.select("div.cust-job-tuple")
+            or soup.select("div.srp-jobtuple-wrapper")
+            or soup.select("div[class*='job-tuple']")
+        )
 
         self._log.info("html.cards_found", count=len(cards))
 
         for card in cards:
             try:
-                title_el = card.select_one("a.title, a[class*='title']")
+                title_el = card.select_one("a.title")
                 title = title_el.get_text(strip=True) if title_el else ""
                 apply_link = title_el.get("href", "") if title_el else ""
+                if apply_link and not apply_link.startswith("http"):
+                    apply_link = f"https://www.naukri.com{apply_link}"
 
-                company_el = card.select_one("a.subTitle, a[class*='comp-name'], span[class*='comp-name']")
+                company_el = card.select_one("a.comp-name, span.comp-dtls-wrap a")
                 company = company_el.get_text(strip=True) if company_el else ""
 
-                loc_el = card.select_one("span[class*='loc'], li[class*='location'], span.locWdth")
+                loc_el = card.select_one("span.locWdth, span.loc-wrap")
                 location = loc_el.get_text(strip=True) if loc_el else ""
 
-                salary_el = card.select_one("span[class*='sal'], li[class*='salary']")
+                salary_el = card.select_one("span.sal-wrap, span[class*='sal']")
                 salary = salary_el.get_text(strip=True) if salary_el else None
 
-                skills_el = card.select("li[class*='tag'], span[class*='skill'], a[class*='skill']")
+                skills_el = card.select("span.dot-gt.tag-li, li.tag-li")
                 skills = [s.get_text(strip=True) for s in skills_el if s.get_text(strip=True)]
 
-                date_el = card.select_one("span[class*='date'], span[class*='ago']")
+                date_el = card.select_one("span.job-post-day")
                 posted_date = _parse_relative_date(date_el.get_text(strip=True)) if date_el else None
 
                 if not (title and company and apply_link):

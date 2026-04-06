@@ -38,7 +38,7 @@ def _parse_relative_date(text: str) -> date | None:
 
 class WellfoundScraper(BaseScraper):
     name: str = "wellfound"
-    requires_login: bool = False
+    requires_login: bool = True  # blank page in headless; requires logged-in session
 
     def _build_search_url(self, page_num: int = 1) -> str:
         base = "https://wellfound.com/jobs"
@@ -80,6 +80,13 @@ class WellfoundScraper(BaseScraper):
 
         await asyncio.sleep(2)
         html = await page.content()
+
+        # Detect Cloudflare bot challenge (wellfound uses captcha-delivery.com)
+        if "captcha-delivery.com" in html or "challenge-platform" in html:
+            self._log.warning("cloudflare.challenge_detected", url=url)
+            await page.close()
+            return []
+
         soup = BeautifulSoup(html, "html.parser")
         jobs: list[Job] = []
 

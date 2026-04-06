@@ -47,12 +47,12 @@ class IndeedScraper(BaseScraper):
         sp = self.search_params
         params: dict[str, str] = {
             "q": sp.title_keywords[0],
-            "l": sp.location,
-            "fromage": "7",  # last 7 days
+            "l": "Delhi, India",  # indeed.co.in redirects to in.indeed.com; explicit location
+            "fromage": "14",  # last 14 days for more coverage
         }
         if page_num > 1:
             params["start"] = str((page_num - 1) * 10)
-        return f"https://www.indeed.co.in/jobs?{urlencode(params)}"
+        return f"https://in.indeed.com/jobs?{urlencode(params)}"
 
     async def scrape(self) -> list[Job]:
         all_jobs: list[Job] = []
@@ -89,24 +89,16 @@ class IndeedScraper(BaseScraper):
 
         for card in cards:
             try:
-                title_el = card.select_one(
-                    "h2.jobTitle a, a[class*='jcs-JobTitle'], "
-                    "h2 a span, a[data-jk]"
-                )
+                # Confirmed live selectors (April 2026) on in.indeed.com
+                title_el = card.select_one("h2.jobTitle a, a[data-jk]")
                 title = title_el.get_text(strip=True) if title_el else ""
                 href = title_el.get("href", "") if title_el else ""
-                apply_link = f"https://www.indeed.co.in{href}" if href and not href.startswith("http") else href
+                apply_link = f"https://in.indeed.com{href}" if href and not href.startswith("http") else href
 
-                company_el = card.select_one(
-                    "span[data-testid='company-name'], span.companyName, "
-                    "span[class*='company']"
-                )
+                company_el = card.select_one("[data-testid='company-name']")
                 company = company_el.get_text(strip=True) if company_el else ""
 
-                loc_el = card.select_one(
-                    "div[data-testid='text-location'], div.companyLocation, "
-                    "span[class*='location']"
-                )
+                loc_el = card.select_one("[data-testid='text-location']")
                 location = loc_el.get_text(strip=True) if loc_el else ""
 
                 salary_el = card.select_one(

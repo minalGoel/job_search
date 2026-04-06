@@ -794,5 +794,193 @@ def analytics() -> None:
         db.close()
 
 
+# ------------------------------------------------------------------
+# Full end-to-end run
+# ------------------------------------------------------------------
+
+@app.command(name="full-run")
+def full_run(
+    skip_vc: bool = typer.Option(False, "--skip-vc", help="Skip VC portal scraping"),
+    skip_mnc: bool = typer.Option(False, "--skip-mnc", help="Skip MNC career page scraping"),
+    skip_funding: bool = typer.Option(False, "--skip-funding", help="Skip funding news scan"),
+    top: int = typer.Option(25, "--top", "-n", help="Number of jobs to show in recommend output"),
+) -> None:
+    """
+    Full end-to-end pipeline:
+      1. Scrape all 14 job platforms
+      2. VC portfolio job portals        (--skip-vc to skip)
+      3. US MNC career pages             (--skip-mnc to skip)
+      4. Funding news scan               (--skip-funding to skip)
+      5. Score & rank all jobs
+      6. Today's action queue
+      7. Export to CSV + Excel
+      8. Analytics summary
+    """
+    _configure_logging()
+    asyncio.run(_full_run_async(skip_vc=skip_vc, skip_mnc=skip_mnc, skip_funding=skip_funding, top=top))
+
+
+async def _full_run_async(
+    skip_vc: bool = False,
+    skip_mnc: bool = False,
+    skip_funding: bool = False,
+    top: int = 25,
+) -> None:
+    import time
+    import json
+    from datetime import datetime as _dt, timedelta
+    from storage.db import JobDB
+    from services.scoring import score_job, _company_slug
+    from services.company_intel import build_company_profiles, enrich_from_funding_data
+    from services.exporter import export_csv, export_excel
+
+    overall_start = time.time()
+
+    def _banner(step: str, title: str) -> None:
+        typer.echo(f"\n{'─' * 60}")
+        typer.echo(f"  {step}  {title}")
+        typer.echo(f"{'─' * 60}")
+
+    def _elapsed(since: float) -> str:
+        s = int(time.time() - since)
+        return f"{s // 60}m {s % 60}s" if s >= 60 else f"{s}s"
+
+    # ── STEP 1: Job platforms ──────────────────────────────────────
+    _banner("[1/8]", "Scraping 14 job platforms")
+    t = time.time()
+    await _run_all()
+    typer.echo(f"  ✓ Platforms done  ({_elapsed(t)})")
+
+    # ── STEP 2: VC portals ─────────────────────────────────────────
+    if not skip_vc:
+        _banner("[2/8]", "VC portfolio job portals")
+        t = time.time()
+        await _run_vc_jobs()
+        typer.echo(f"  ✓ VC portals done  ({_elapsed(t)})")
+    else:
+        typer.echo("\n[2/8] VC portals — SKIPPED (--skip-vc)")
+
+    # ── STEP 3: MNC careers ────────────────────────────────────────
+    if not skip_mnc:
+        _banner("[3/8]", "US MNC career pages")
+        t = time.time()
+        await _run_mnc_jobs()
+        typer.echo(f"  ✓ MNC careers done  ({_elapsed(t)})")
+    else:
+        typer.echo("\n[3/8] MNC careers — SKIPPED (--skip-mnc)")
+
+    # ── STEP 4: Funding scan ───────────────────────────────────────
+    if not skip_funding:
+        _banner("[4/8]", "Funding news scan (Inc42, YourStory, Entrackr, VCCircle)")
+        t = time.time()
+        await _run_funding()
+        typer.echo(f"  ✓ Funding scan done  ({_elapsed(t)})")
+    else:
+        typer.echo("\n[4/8] Funding scan — SKIPPED (--skip-funding)")
+
+    # ── STEP 5: Score & rank ───────────────────────────────────────
+    _banner("[5/8]", "Scoring & ranking all jobs")
+    t = time.time()
+    db = JobDB()
+    try:
+        n_profiles = build_company_profiles(db)
+        n_funded = enrich_from_funding_data(db)
+        typer.echo(f"  Company profiles: {n_profiles}  |  Funded companies: {n_funded}")
+
+        company_profiles = db.get_all_company_profiles()
+        to_score = db.get_jobs_for_scoring(rescore_all=False)
+        if to_score:
+            typer.echo(f"  Scoring {len(to_score)} unscored job(s)...")
+            for job in to_score:
+                profile = company_profiles.get(_company_slug(job.get("company", "")))
+                scores = score_job(job, profile)
+                db.update_job_scores(job["id"], scores)
+            typer.echo(f"  ✓ Scoring done  ({_elapsed(t)})")
+        else:
+            typer.echo("  All jobs already scored.")
+
+        # ── STEP 6: Today's action queue ──────────────────────────
+        _banner("[6/8]", "Today's action queue")
+        top_jobs = db.get_top_recommended_jobs(top_n=top, bucket=None, include_low=False)
+        must_high = [j for j in top_jobs if j.get("priority_bucket") in ("must_apply", "high")]
+
+        typer.echo(f"\n  TOP PICKS TO APPLY NOW  (must_apply / high bucket, top {top})")
+        typer.echo(f"  {'Score':<6} {'Bucket':<13} {'Title':<38} {'Company':<28} {'Platform'}")
+        typer.echo("  " + "─" * 100)
+        if must_high:
+            for j in must_high[:top]:
+                typer.echo(
+                    f"  {j.get('priority_score', 0):<6} {j.get('priority_bucket', ''):<13} "
+                    f"{j.get('title', '')[:37]:<38} {j.get('company', '')[:27]:<28} "
+                    f"{j.get('platform', '')}"
+                )
+                typer.echo(f"    → {j.get('apply_link', '')[:100]}")
+        else:
+            typer.echo("  No must_apply/high jobs yet.")
+
+        # Warm leads
+        all_jobs = db.get_all_jobs()
+        warm_jobs = sorted(
+            [j for j in all_jobs if (j.get("warmth_score") or 0) > 0 and not j.get("is_duplicate")],
+            key=lambda j: j.get("warmth_score", 0),
+            reverse=True,
+        )[:3]
+        typer.echo(f"\n  WARM LEADS")
+        if warm_jobs:
+            for j in warm_jobs:
+                matches = db.get_connection_matches_for_job(j["id"])
+                names = ", ".join(m.get("contact_name", "") for m in matches[:2])
+                typer.echo(f"  [warmth={j.get('warmth_score',0)}] {j.get('title','')[:38]:38} @ {j.get('company','')}")
+                typer.echo(f"    Connections: {names or '(unknown)'}")
+        else:
+            typer.echo("  None — run 'connections-import' to match LinkedIn contacts.")
+
+        # Follow-ups
+        apps = db.get_applications()
+        cutoff = (_dt.now() - timedelta(days=3)).isoformat()
+        due = [a for a in apps if a.get("status") in ("applied", "reached_out") and (a.get("last_action_at") or "") < cutoff]
+        typer.echo(f"\n  FOLLOW-UPS OVERDUE")
+        if due:
+            for a in due[:3]:
+                typer.echo(f"  {a.get('status',''):<14} {a.get('title','')[:38]:38} @ {a.get('company','')}  (last: {(a.get('last_action_at',''))[:10]})")
+        else:
+            typer.echo("  None overdue.")
+
+        # ── STEP 7: Export ─────────────────────────────────────────
+        _banner("[7/8]", "Exporting CSV + Excel")
+        t = time.time()
+        settings.OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+        all_jobs_export = db.get_all_jobs()
+        csv_path = export_csv(all_jobs_export, settings.OUTPUT_DIR)
+        export_excel(all_jobs_export, [], settings.OUTPUT_DIR)
+        typer.echo(f"  ✓ Exported {len(all_jobs_export)} jobs → {settings.OUTPUT_DIR}  ({_elapsed(t)})")
+
+        # ── STEP 8: Analytics summary ──────────────────────────────
+        _banner("[8/8]", "Analytics summary")
+        source_stats = db.get_source_quality_stats()
+        typer.echo(f"  {'Platform':<18} {'Total':<8} {'Avg Score':<12} High Quality")
+        typer.echo("  " + "─" * 55)
+        for row in source_stats:
+            typer.echo(
+                f"  {row['platform']:<18} {row['total']:<8} "
+                f"{row['avg_score'] or 0:>6.1f}      {row['high_quality']}"
+            )
+
+        stats = db.get_pipeline_stats()
+        typer.echo(f"\n  Total jobs (non-duplicate): {stats['total_jobs']}")
+        typer.echo(f"  Scored:                     {stats['scored_jobs']}")
+        for b in ("must_apply", "high", "medium", "low"):
+            typer.echo(f"    {b:<14} {stats.get(f'bucket_{b}', 0)}")
+
+    finally:
+        db.close()
+
+    # ── Done ───────────────────────────────────────────────────────
+    typer.echo(f"\n{'═' * 60}")
+    typer.echo(f"  FULL RUN COMPLETE  —  total time: {_elapsed(overall_start)}")
+    typer.echo(f"  Output: {settings.OUTPUT_DIR}")
+    typer.echo(f"{'═' * 60}\n")
+
+
 if __name__ == "__main__":
     app()

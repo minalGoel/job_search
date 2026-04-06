@@ -2,8 +2,10 @@ from __future__ import annotations
 
 import asyncio
 import json
+import random
 import re
 from datetime import date, timedelta
+from pathlib import Path
 from typing import Any
 from urllib.parse import urlencode
 
@@ -56,12 +58,9 @@ class FounditScraper(BaseScraper):
             "locations": sp.location,
             "sort": "1",  # sort by relevance
         }
-        if sp.experience_min is not None and sp.experience_max is not None:
-            params["experienceRanges"] = f"{sp.experience_min}~{sp.experience_max}"
-        elif sp.experience_min is not None:
-            params["experienceRanges"] = f"{sp.experience_min}~"
-        if sp.min_ctc_lpa:
-            params["salary"] = str(sp.min_ctc_lpa)
+        # NOTE: salary param omitted — it causes zero results on foundit
+        # Experience range intentionally broadened to avoid filtering too aggressively
+        params["experienceRanges"] = "3~15"
         if page_num > 1:
             params["start"] = str((page_num - 1) * 15)
         return f"https://www.foundit.in/srp/results?{urlencode(params)}"
@@ -85,14 +84,19 @@ class FounditScraper(BaseScraper):
         return all_jobs
 
     async def _scrape_page(self, url: str, page_num: int) -> list[Job]:
-        """Try intercepting JSON API calls, fall back to HTML parsing."""
+        """Try intercepting JSON API calls, fall back to HTML parsing.
+
+        Registers the response handler BEFORE page.goto() so the initial
+        API response on first load is not missed.
+        """
         captured_responses: list[dict[str, Any]] = []
 
         async def _intercept(response: Response) -> None:
             resp_url = response.url
             if (
                 response.status == 200
-                and ("api" in resp_url or "middleware" in resp_url or "search" in resp_url)
+                and ("api" in resp_url or "middleware" in resp_url or "search" in resp_url
+                     or "srp" in resp_url or "jobs" in resp_url)
                 and "application/json" in (response.headers.get("content-type", ""))
             ):
                 try:
@@ -104,16 +108,17 @@ class FounditScraper(BaseScraper):
                 except Exception:
                     pass
 
-        page = await self._get_page(url)
+        # Register handler BEFORE goto so the first-load API call is captured
+        context = await self.bm.get_context(self.name, Path("cookies"))
+        page = await context.new_page()
         page.on("response", _intercept)
-
-        # Reload to capture API calls
+        await asyncio.sleep(random.uniform(2.0, 4.0))
         try:
-            await page.reload(wait_until="networkidle", timeout=15_000)
+            await page.goto(url, wait_until="domcontentloaded", timeout=20_000)
         except Exception:
-            self._log.debug("page.reload_timeout", page=page_num)
+            self._log.debug("page.goto_timeout", page=page_num)
 
-        await asyncio.sleep(3)
+        await asyncio.sleep(4)
 
         # --- Strategy 1: JSON API ---
         if captured_responses:
@@ -133,11 +138,24 @@ class FounditScraper(BaseScraper):
     def _parse_api_response(self, responses: list[dict[str, Any]]) -> list[Job]:
         jobs: list[Job] = []
         for resp in responses:
+            if not isinstance(resp, dict):
+                continue
             # Foundit may nest results under different keys
+            data = resp.get("data")
+            if isinstance(data, dict):
+                data_items = data.get("jobs", []) or data.get("jobDetails", [])
+            elif isinstance(data, list):
+                # Check if items look like job listings (have title/designation)
+                data_items = data if data and isinstance(data[0], dict) and (
+                    data[0].get("title") or data[0].get("designation")
+                ) else []
+            else:
+                data_items = []
+            sr = resp.get("searchResult", {})
             items = (
                 resp.get("jobDetails", [])
-                or resp.get("searchResult", {}).get("jobDetails", [])
-                or resp.get("data", {}).get("jobs", [])
+                or (sr.get("jobDetails", []) if isinstance(sr, dict) else [])
+                or data_items
                 or []
             )
             for item in items:
@@ -191,74 +209,46 @@ class FounditScraper(BaseScraper):
         soup = BeautifulSoup(html, "html.parser")
         jobs: list[Job] = []
 
-        # Foundit uses card-based layouts
-        cards = (
-            soup.select("div.srpResultCardContainer")
-            or soup.select("div[class*='job-card']")
-            or soup.select("div[class*='jobCard']")
-            or soup.select("div[class*='card-apply']")
-        )
-
+        # Confirmed live selectors (April 2026): cards have id="{jobId}"
+        cards = soup.select("div.cardContainer")
         if not cards:
-            # Broader fallback
-            cards = soup.select("div[data-job-id]") or soup.select("article[class*='job']")
+            cards = (
+                soup.select("div.srpResultCardContainer")
+                or soup.select("div[class*='jobCard']")
+                or soup.select("div[data-job-id]")
+            )
 
         self._log.info("html.cards_found", count=len(cards))
 
         for card in cards:
             try:
-                # Title and link
-                title_el = card.select_one(
-                    "a[class*='title'], h2 a, h3 a, "
-                    "a[class*='job-title'], a[class*='jobTitle']"
-                )
+                # Title
+                title_el = card.select_one("div.jobTitle")
                 title = title_el.get_text(strip=True) if title_el else ""
-                apply_link = title_el.get("href", "") if title_el else ""
-                if apply_link and not apply_link.startswith("http"):
-                    apply_link = f"https://www.foundit.in{apply_link}"
+
+                # Apply link via card id (confirmed: <div class="cardContainer" id="48540761">)
+                job_id = card.get("id", "")
+                apply_link = f"https://www.foundit.in/job/{job_id}" if job_id else ""
 
                 # Company
-                company_el = card.select_one(
-                    "span[class*='company'], a[class*='company'], "
-                    "div[class*='company'], span[class*='companyName']"
-                )
+                company_el = card.select_one("div.companyName")
                 company = company_el.get_text(strip=True) if company_el else ""
 
-                # Location
-                loc_el = card.select_one(
-                    "span[class*='loc'], span[class*='location'], "
-                    "div[class*='location']"
-                )
-                location = loc_el.get_text(strip=True) if loc_el else ""
-
-                # Salary
-                salary_el = card.select_one(
-                    "span[class*='salary'], span[class*='sal'], "
-                    "div[class*='salary']"
-                )
-                salary = salary_el.get_text(strip=True) if salary_el else None
-
-                # Skills
-                skills_els = card.select(
-                    "span[class*='skill'], a[class*='skill'], "
-                    "li[class*='skill'], span[class*='tag']"
-                )
-                skills = [s.get_text(strip=True) for s in skills_els if s.get_text(strip=True)]
+                # bodyRow divs: [experience, salary (optional), location]
+                body_rows = [el.get_text(strip=True) for el in card.select("div.bodyRow") if el.get_text(strip=True)]
+                location = body_rows[-1] if body_rows else ""
+                salary = body_rows[1] if len(body_rows) >= 3 else None
 
                 # Date
-                date_el = card.select_one(
-                    "span[class*='date'], span[class*='posted'], "
-                    "div[class*='date']"
-                )
+                date_el = card.select_one("div.timeText")
                 posted_date = _parse_relative_date(
                     date_el.get_text(strip=True) if date_el else ""
                 )
 
+                skills: list[str] = []
+
                 if not (title and apply_link):
                     continue
-
-                # Fetch full description
-                description = await self._fetch_description(apply_link)
 
                 jobs.append(
                     Job(
@@ -269,7 +259,7 @@ class FounditScraper(BaseScraper):
                         salary=salary,
                         posted_date=posted_date,
                         skills=skills,
-                        description=description,
+                        description="",
                         apply_link=apply_link,
                     )
                 )

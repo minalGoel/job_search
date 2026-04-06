@@ -53,9 +53,9 @@ class LinkedInScraper(BaseScraper):
         base = (
             f"https://www.linkedin.com/jobs/search/"
             f"?keywords={keyword}"
-            f"&location=Delhi+NCR"
-            f"&f_E=4"        # senior level
-            f"&f_TPR=r604800"  # past week
+            f"&location=Delhi%2C+India"
+            f"&f_TPR=r2592000"  # past 30 days (broader window for more results)
+            # f_E filter removed — "Senior" filter was returning only 2 results
         )
         if page_num > 1:
             base += f"&start={(page_num - 1) * 25}"
@@ -93,8 +93,10 @@ class LinkedInScraper(BaseScraper):
             html = await page.content()
             soup = BeautifulSoup(html, "html.parser")
 
+            # Logged-in selectors (confirmed April 2026): div.job-card-container
             cards = (
-                soup.select("div.base-card")
+                soup.select("div.job-card-container")
+                or soup.select("div.base-card")
                 or soup.select("li.result-card")
                 or soup.select("div[class*='job-search-card']")
                 or soup.select("ul.jobs-search__results-list > li")
@@ -107,24 +109,31 @@ class LinkedInScraper(BaseScraper):
 
             for card in cards:
                 try:
+                    # Logged-in selectors
                     title_el = card.select_one(
-                        "h3.base-search-card__title, h3[class*='title'], "
-                        "span[class*='sr-only']"
+                        "a.job-card-container__link, .job-card-list__title, "
+                        "h3.base-search-card__title, h3[class*='title']"
                     )
                     title = title_el.get_text(strip=True) if title_el else ""
 
-                    link_el = card.select_one("a.base-card__full-link, a[class*='card']")
+                    link_el = card.select_one(
+                        "a.job-card-container__link, a.base-card__full-link, a[href*='/jobs/view/']"
+                    )
                     apply_link = link_el.get("href", "").split("?")[0] if link_el else ""
 
                     company_el = card.select_one(
+                        ".job-card-container__primary-description, "
                         "h4.base-search-card__subtitle, a[class*='subtitle']"
                     )
                     company = company_el.get_text(strip=True) if company_el else ""
 
-                    loc_el = card.select_one("span.job-search-card__location, span[class*='location']")
+                    loc_el = card.select_one(
+                        ".job-card-container__metadata-item, "
+                        "span.job-search-card__location, span[class*='location']"
+                    )
                     location = loc_el.get_text(strip=True) if loc_el else ""
 
-                    date_el = card.select_one("time, span[class*='date']")
+                    date_el = card.select_one("time, span[class*='date'], span[class*='listdate']")
                     date_text = date_el.get("datetime", "") or (date_el.get_text(strip=True) if date_el else "")
                     posted_date = _parse_relative_date(date_text)
 

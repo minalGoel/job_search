@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import re
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 from typing import Any
 
 import structlog
@@ -16,9 +16,14 @@ from scrapers.base import BaseScraper
 log = structlog.get_logger(__name__)
 
 
-def _parse_relative_date(text: str) -> date | None:
+def _parse_date(text: str) -> date | None:
     if not text:
         return None
+    # ISO datetime string e.g. "2026-04-01T11:08:44.000Z"
+    try:
+        return datetime.fromisoformat(text.replace("Z", "+00:00")).date()
+    except Exception:
+        pass
     text = text.strip().lower()
     today = date.today()
     if "today" in text or "just" in text:
@@ -33,33 +38,21 @@ def _parse_relative_date(text: str) -> date | None:
 
 
 class WeekdayScraper(BaseScraper):
-    """Weekday.works scraper — India-focused startup hiring platform.
+    """Weekday.works scraper.
 
-    Login-gated SPA. Intercepts API calls for structured data.
+    Weekday uses Next.js SSR — job data is embedded in the ``__NEXT_DATA__``
+    script tag as ``props.pageProps.jobs``.  We extract that JSON directly
+    instead of relying on API interception or class-based DOM selectors.
     """
 
     name: str = "weekday"
     requires_login: bool = True
 
     async def scrape(self) -> list[Job]:
-        url = "https://www.weekday.works/jobs/product-manager-jobs-in-india-remote"
-        captured_api: list[dict[str, Any]] = []
-
-        async def _intercept(response: Response) -> None:
-            if response.status == 200:
-                content_type = response.headers.get("content-type", "")
-                if "json" in content_type and (
-                    "api" in response.url or "jobs" in response.url
-                    or "graphql" in response.url
-                ):
-                    try:
-                        body = await response.json()
-                        captured_api.append(body)
-                    except Exception:
-                        pass
+        url = "https://www.weekday.works/jobs/in/product-manager/ncr"
+        self._log.info("page.scraping", url=url)
 
         page = await self._get_page(url)
-        page.on("response", _intercept)
 
         # Check if redirected to login
         if "login" in page.url.lower() or "signin" in page.url.lower():
@@ -67,142 +60,160 @@ class WeekdayScraper(BaseScraper):
             await page.close()
             return []
 
-        # Wait for job cards
+        # Wait for Next.js hydration to complete
         try:
-            await page.wait_for_selector(
-                "div[class*='job'], div[class*='card'], a[class*='job']",
-                timeout=12_000,
-            )
+            await page.wait_for_selector("#__NEXT_DATA__", timeout=12_000)
         except Exception:
-            self._log.debug("wait.timeout")
+            self._log.debug("wait.next_data.timeout")
 
-        await asyncio.sleep(3)
+        await asyncio.sleep(2)
 
-        # Scroll to load more
-        for _ in range(5):
-            await page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
-            await asyncio.sleep(2)
+        # Extract job data from __NEXT_DATA__
+        jobs = await self._parse_next_data(page)
 
-        # Try API data first
-        if captured_api:
-            self._log.info("api.captured", count=len(captured_api))
-            jobs = self._parse_api(captured_api)
-            if jobs:
-                await page.close()
-                return jobs
+        if not jobs:
+            # Fallback: DOM-based parsing
+            html = await page.content()
+            jobs = self._parse_html(html)
 
-        # Fallback: DOM parsing
-        html = await page.content()
-        jobs = self._parse_html(html)
         await page.close()
         return jobs
 
-    def _parse_api(self, responses: list[dict[str, Any]]) -> list[Job]:
-        jobs: list[Job] = []
-        for resp in responses:
-            items = (
-                resp.get("data", {}).get("jobs", [])
-                or resp.get("jobs", [])
-                or resp.get("results", [])
-                or []
+    async def _parse_next_data(self, page: Any) -> list[Job]:
+        """Extract jobs from Next.js __NEXT_DATA__ JSON in the page."""
+        try:
+            next_data_text = await page.eval_on_selector(
+                "#__NEXT_DATA__", "el => el.textContent"
             )
-            for item in items:
-                try:
-                    title = item.get("title", "") or item.get("role", "")
-                    company = (
-                        item.get("company", {}).get("name", "")
-                        if isinstance(item.get("company"), dict)
-                        else item.get("companyName", "")
-                    )
-                    location = item.get("location", "") or item.get("city", "")
-                    if isinstance(location, list):
-                        location = ", ".join(location)
+            data = json.loads(next_data_text)
+            raw_jobs = data.get("props", {}).get("pageProps", {}).get("jobs", [])
+            self._log.info("next_data.jobs_found", count=len(raw_jobs))
+            return self._parse_api(raw_jobs)
+        except Exception:
+            self._log.debug("next_data.parse_failed")
+            return []
 
-                    salary = item.get("salary", "") or item.get("ctc", "")
-                    if isinstance(salary, dict):
-                        salary = f"{salary.get('min', '')} - {salary.get('max', '')} LPA"
+    def _parse_api(self, raw_jobs: list[dict[str, Any]]) -> list[Job]:
+        jobs: list[Job] = []
+        for item in raw_jobs:
+            try:
+                title = item.get("role", "") or item.get("title", "")
+                company = item.get("companyName", "") or item.get("company", "")
 
-                    skills = item.get("skills", []) or item.get("tags", [])
-                    if isinstance(skills, list) and skills and isinstance(skills[0], dict):
-                        skills = [s.get("name", "") for s in skills]
+                # location is a list e.g. ["Gurugram, Haryana, India"]
+                location_raw = item.get("location", "")
+                if isinstance(location_raw, list):
+                    location = ", ".join(location_raw)
+                else:
+                    location = str(location_raw)
 
-                    apply_link = item.get("url", "") or item.get("link", "")
-                    if apply_link and not apply_link.startswith("http"):
-                        apply_link = f"https://www.weekday.works{apply_link}"
+                # salary
+                min_sal = item.get("minJdSalary")
+                max_sal = item.get("maxJdSalary")
+                currency = item.get("salaryCurrencyCode", "INR")
+                if min_sal and max_sal:
+                    salary = f"{min_sal} - {max_sal} {currency}"
+                elif min_sal:
+                    salary = f"{min_sal}+ {currency}"
+                else:
+                    salary = None
 
-                    description = item.get("description", "") or item.get("jd", "")
-                    posted_text = item.get("postedDate", "") or item.get("createdAt", "")
-                    posted_date = _parse_relative_date(str(posted_text))
+                # skills
+                skills_raw = item.get("skills") or []
+                if isinstance(skills_raw, list):
+                    skills = [
+                        (s.get("name", "") if isinstance(s, dict) else str(s)).strip()
+                        for s in skills_raw
+                    ]
+                    skills = [s for s in skills if s]
+                else:
+                    skills = []
 
-                    if title and company and apply_link:
-                        jobs.append(
-                            Job(
-                                platform="weekday",
-                                title=title.strip(),
-                                company=company.strip(),
-                                location=str(location).strip(),
-                                salary=str(salary).strip() if salary else None,
-                                posted_date=posted_date,
-                                skills=[s for s in skills if isinstance(s, str) and s],
-                                description=description,
-                                apply_link=apply_link,
-                            )
+                # apply link — prefer jdLink (usually LinkedIn), else build from identifier
+                apply_link = (
+                    item.get("jdLink", "")
+                    or item.get("careersPageLink", "")
+                    or item.get("directJobLink", "")
+                )
+                if not apply_link:
+                    jd_id = item.get("jdIdentifier", "")
+                    if jd_id:
+                        apply_link = f"https://jobs.weekday.works/jd/{jd_id}"
+
+                # description (HTML)
+                description = item.get("jobDetailsFromCompany", "") or ""
+
+                # posted date
+                posted_date = _parse_date(item.get("addedOn", ""))
+
+                if title and company and apply_link:
+                    jobs.append(
+                        Job(
+                            platform="weekday",
+                            title=title.strip(),
+                            company=company.strip(),
+                            location=location.strip(),
+                            salary=salary,
+                            posted_date=posted_date,
+                            skills=skills,
+                            description=description,
+                            apply_link=apply_link,
                         )
-                except Exception:
-                    self._log.exception("api.parse_failed")
+                    )
+            except Exception:
+                self._log.exception("api.parse_failed")
         return jobs
 
     def _parse_html(self, html: str) -> list[Job]:
+        """Fallback: parse job links from the rendered DOM.
+
+        Weekday uses styled-components with hashed class names, so we match
+        on the link href pattern to jobs.weekday.works.
+        """
         soup = BeautifulSoup(html, "html.parser")
         jobs: list[Job] = []
 
-        cards = (
-            soup.select("div[class*='job-card']")
-            or soup.select("div[class*='jobCard']")
-            or soup.select("a[class*='job']")
-            or soup.select("div[class*='card'][class*='listing']")
-        )
+        # Every job has a named <a> link → the text is the job title
+        job_links = soup.select('a[href*="jobs.weekday.works"]')
+        self._log.info("html.job_links_found", count=len(job_links))
 
-        self._log.info("html.cards_found", count=len(cards))
+        seen: set[str] = set()
+        for link in job_links:
+            title = link.get_text(strip=True)
+            href = link.get("href", "")
+            if not title or href in seen:
+                continue
+            seen.add(href)
 
-        for card in cards:
-            try:
-                title_el = card.select_one("h2, h3, div[class*='title'], span[class*='title']")
-                title = title_el.get_text(strip=True) if title_el else ""
+            # company name is encoded in the URL filter param:
+            # ?filters={"companies":["airtel"]}
+            company = ""
+            m = re.search(r'"companies":\["([^"]+)"\]', href)
+            if m:
+                company = m.group(1).replace("-", " ").title()
 
-                link_el = card.select_one("a[href]") or (card if card.name == "a" else None)
-                href = link_el.get("href", "") if link_el else ""
-                if href and not href.startswith("http"):
-                    href = f"https://www.weekday.works{href}"
+            # location: look for the next text sibling nodes in the parent container
+            parent = link.parent
+            location = ""
+            if parent:
+                text = parent.get_text(" ", strip=True)
+                # Pattern: "Title • Location • N Employees"
+                parts = [p.strip() for p in text.split("•")]
+                if len(parts) >= 2:
+                    location = parts[1]
 
-                company_el = card.select_one("span[class*='company'], div[class*='company']")
-                company = company_el.get_text(strip=True) if company_el else ""
-
-                loc_el = card.select_one("span[class*='location'], div[class*='location']")
-                location = loc_el.get_text(strip=True) if loc_el else ""
-
-                salary_el = card.select_one("span[class*='salary'], div[class*='salary']")
-                salary = salary_el.get_text(strip=True) if salary_el else None
-
-                skills_els = card.select("span[class*='skill'], span[class*='tag']")
-                skills = [s.get_text(strip=True) for s in skills_els if s.get_text(strip=True)]
-
-                if not (title and href):
-                    continue
-
+            if title:
                 jobs.append(
                     Job(
                         platform="weekday",
                         title=title,
                         company=company,
                         location=location,
-                        salary=salary,
-                        skills=skills,
+                        salary=None,
+                        skills=[],
                         description="",
                         apply_link=href,
                     )
                 )
-            except Exception:
-                self._log.exception("card.parse_failed")
 
         return jobs
