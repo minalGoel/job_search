@@ -88,7 +88,8 @@ job_search/
 │   ├── dedup.py                   # Cross-platform duplicate marking via dedup_hash
 │   ├── exporter.py                # CSV per-run + cumulative Excel (openpyxl) with conditional formatting
 │   ├── notifier.py                # SMTP email alerts for new jobs + session expiry warnings
-│   ├── scoring.py                 # Weighted heuristic scorer → relevance/salary/warmth/quality/priority scores + flags
+│   ├── scoring.py                 # Weighted heuristic scorer → relevance/salary/warmth/quality/semantic/priority scores + flags
+│   ├── semantic_scorer.py         # sentence-transformers semantic similarity scorer (all-MiniLM-L6-v2, lazy-loaded singleton)
 │   ├── company_intel.py           # Company profile cache (MNC registry + VC registry + scraped jobs)
 │   ├── connection_matcher.py      # LinkedIn CSV import + warmth scoring via company/alumni matching
 │   └── outreach_writer.py         # 4 deterministic outreach templates (recruiter/HM/funded/warm-intro)
@@ -119,6 +120,8 @@ job_search/
 - **Company slug normalisation**: `_company_slug()` in `services/scoring.py` strips punctuation and legal suffixes (pvt, ltd, technologies, etc.). All modules that look up `company_profiles` keys must use this same function — never compute slugs inline.
 - **Scoring is dict-based**: `score_job()` and `score_jobs()` operate on plain dicts (as returned by `JobDB`), not on `Job` model instances. Score fields are persisted via `db.update_job_scores()`.
 - **priority_bucket is the "scored" sentinel**: A job with `priority_bucket = ''` has never been scored. `get_jobs_for_scoring()` uses this condition — not `priority_score = 0`, which would incorrectly rescore legitimately poor-signal jobs.
+- **Semantic scorer is a lazy singleton**: `services/semantic_scorer.py` loads `all-MiniLM-L6-v2` (sentence-transformers) once on first call, guarded by `threading.Lock`. Returns 0 gracefully if the package is not installed — nothing in the pipeline breaks. The candidate embedding is built from `data/candidate_profile.json`.
+- **Six scoring dimensions**: `score_job()` returns `relevance_score`, `salary_likelihood_score`, `warmth_score`, `company_quality_score`, `semantic_score`, `priority_score`, `priority_bucket`, `score_reasons`, `priority_flags`. The `PRIORITY_WEIGHTS` in `config/scoring_rules.py` has five keys: `relevance` (0.35), `salary` (0.28), `warmth` (0.13), `company_quality` (0.09), `semantic` (0.15) — must sum to 1.0.
 
 ## CLI Commands
 

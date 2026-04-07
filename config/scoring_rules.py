@@ -111,12 +111,14 @@ COMPANY_QUALITY_SCORES: dict[str, int] = {
 
 # ---------------------------------------------------------------------------
 # Priority score weights (must sum to 1.0)
+# semantic weight uses sentence-transformers embeddings; gracefully 0 if not installed.
 # ---------------------------------------------------------------------------
 PRIORITY_WEIGHTS: dict[str, float] = {
-    "relevance": 0.45,
-    "salary": 0.30,
-    "warmth": 0.15,
-    "company_quality": 0.10,
+    "relevance": 0.35,
+    "salary": 0.28,
+    "warmth": 0.13,
+    "company_quality": 0.09,
+    "semantic": 0.15,
 }
 
 # ---------------------------------------------------------------------------

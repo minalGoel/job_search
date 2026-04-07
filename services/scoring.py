@@ -25,6 +25,7 @@ from config.scoring_rules import (
     SALARY_SCORES,
     TITLE_WEIGHTS,
 )
+from services.semantic_scorer import score_semantic
 
 
 # ---------------------------------------------------------------------------
@@ -265,19 +266,27 @@ def score_job(job: dict, company_profile: Optional[dict] = None) -> dict:
     quality = max(0, min(100, quality))
 
     # ----------------------------------------------------------------
-    # 5. Priority score (weighted composite)
+    # 5. Semantic similarity score
+    # ----------------------------------------------------------------
+    semantic = score_semantic(job)
+    if semantic > 0:
+        reasons.append(f"semantic_match:{semantic}")
+
+    # ----------------------------------------------------------------
+    # 6. Priority score (weighted composite)
     # ----------------------------------------------------------------
     priority = int(
         relevance * PRIORITY_WEIGHTS["relevance"]
         + salary * PRIORITY_WEIGHTS["salary"]
         + warmth * PRIORITY_WEIGHTS["warmth"]
         + quality * PRIORITY_WEIGHTS["company_quality"]
+        + semantic * PRIORITY_WEIGHTS["semantic"]
     )
     priority = max(0, min(100, priority))
     bucket = _priority_bucket(priority)
 
     # ----------------------------------------------------------------
-    # 6. Additional flags
+    # 7. Additional flags
     # ----------------------------------------------------------------
     if "project manager" in title and "product" not in title:
         flags.append("likely_project_manager_role")
@@ -303,6 +312,7 @@ def score_job(job: dict, company_profile: Optional[dict] = None) -> dict:
         "salary_likelihood_score": salary,
         "warmth_score": warmth,
         "company_quality_score": quality,
+        "semantic_score": semantic,
         "priority_score": priority,
         "priority_bucket": bucket,
         "score_reasons": json.dumps(reasons),

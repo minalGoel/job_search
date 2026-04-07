@@ -237,7 +237,45 @@ If you find a raw hex value outside `:root` / `DS`, treat it as a bug of the sam
 
 ---
 
-## 19. Tests in three layers
+## 19. ML model loading: lazy singleton + threading.Lock + graceful degradation
+
+Any module that loads a heavy model (sentence-transformers, transformers, etc.) must follow three rules:
+
+**1. Lazy singleton with a `threading.Lock`:**
+```python
+_lock = threading.Lock()
+_model = None
+
+def _load():
+    global _model
+    if _model is not None:          # fast path — no lock
+        return _model
+    with _lock:
+        if _model is not None:      # re-check inside lock
+            return _model
+        _model = load_heavy_thing()
+        return _model
+```
+Double-checked locking prevents two threads from loading simultaneously while avoiding lock acquisition on every call after warm-up.
+
+**2. Graceful degradation on `ImportError`:**
+```python
+try:
+    from sentence_transformers import SentenceTransformer
+except ImportError:
+    log.warning("package not installed")
+    return None, None   # callers treat None as score = 0
+```
+Optional ML deps must never crash the pipeline. The feature silently contributes 0 instead.
+
+**3. Candidate text from config, not hardcoded:**
+The embedding anchor (what "good" looks like) is built from `data/candidate_profile.json`, not from a literal string. If the candidate profile changes, rescoring automatically reflects the new profile without code changes.
+
+See `services/semantic_scorer.py` for the reference implementation.
+
+---
+
+## 20. Tests in three layers
 
 1. **Compile check** — every touched module imports cleanly. Cheapest, fastest, most reliable.
 2. **Behavioral smoke test** — one Python inline script that imports the changed functions and asserts the specific behaviour you claim to have fixed. This is where you catch "the fix compiled but doesn't actually fix the bug."

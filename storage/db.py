@@ -83,6 +83,7 @@ class JobDB:
                 salary_likelihood_score INTEGER DEFAULT 0,
                 warmth_score INTEGER DEFAULT 0,
                 company_quality_score INTEGER DEFAULT 0,
+                semantic_score INTEGER DEFAULT 0,
                 priority_bucket TEXT DEFAULT '',
                 score_reasons TEXT DEFAULT '[]',
                 priority_flags TEXT DEFAULT '[]'
@@ -173,6 +174,7 @@ class JobDB:
             ("salary_likelihood_score", "INTEGER DEFAULT 0"),
             ("warmth_score", "INTEGER DEFAULT 0"),
             ("company_quality_score", "INTEGER DEFAULT 0"),
+            ("semantic_score", "INTEGER DEFAULT 0"),
             ("priority_bucket", "TEXT DEFAULT ''"),
             ("score_reasons", "TEXT DEFAULT '[]'"),
             ("priority_flags", "TEXT DEFAULT '[]'"),
@@ -291,6 +293,7 @@ class JobDB:
                 salary_likelihood_score = ?,
                 warmth_score = ?,
                 company_quality_score = ?,
+                semantic_score = ?,
                 priority_bucket = ?,
                 score_reasons = ?,
                 priority_flags = ?
@@ -301,6 +304,7 @@ class JobDB:
                 scores.get("salary_likelihood_score", 0),
                 scores.get("warmth_score", 0),
                 scores.get("company_quality_score", 0),
+                scores.get("semantic_score", 0),
                 scores.get("priority_bucket", ""),
                 scores.get("score_reasons", "[]"),
                 scores.get("priority_flags", "[]"),
