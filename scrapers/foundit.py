@@ -15,6 +15,7 @@ from playwright.async_api import Page, Response
 
 from models.job import Job
 from scrapers.base import BaseScraper
+from services.location_filter import is_acceptable_location
 
 log = structlog.get_logger(__name__)
 
@@ -188,12 +189,16 @@ class FounditScraper(BaseScraper):
                     description = item.get("jobDescription", "") or item.get("description", "")
 
                     if title and company and apply_link:
+                        loc = location.strip() if isinstance(location, str) else str(location)
+                        if not is_acceptable_location(loc):
+                            self._log.debug("api.location_rejected", title=title, location=loc)
+                            continue
                         jobs.append(
                             Job(
                                 platform="foundit",
                                 title=title.strip(),
                                 company=company.strip(),
-                                location=location.strip() if isinstance(location, str) else location,
+                                location=loc,
                                 salary=salary.strip() if salary else None,
                                 posted_date=posted_date,
                                 skills=[s for s in skills if s],
@@ -250,6 +255,10 @@ class FounditScraper(BaseScraper):
                 if not (title and apply_link):
                     continue
 
+                if not is_acceptable_location(location):
+                    self._log.debug("html.location_rejected", title=title, location=location)
+                    continue
+
                 jobs.append(
                     Job(
                         platform="foundit",
@@ -272,18 +281,23 @@ class FounditScraper(BaseScraper):
         """Navigate to a job detail page and extract the full JD."""
         if not url:
             return ""
+        detail_page = None
         try:
-            page = await self._get_page(url)
-            html = await page.content()
+            detail_page = await self._get_page(url)
+            html = await detail_page.content()
             soup = BeautifulSoup(html, "html.parser")
             jd_el = soup.select_one(
                 "div[class*='job-desc'], div[class*='jd-desc'], "
                 "div[class*='description'], section[class*='job-detail'], "
                 "div[class*='jobDescription']"
             )
-            description = jd_el.get_text(separator="\n", strip=True) if jd_el else ""
-            await page.close()
-            return description
+            return jd_el.get_text(separator="\n", strip=True) if jd_el else ""
         except Exception:
             self._log.debug("description.fetch_failed", url=url)
             return ""
+        finally:
+            if detail_page is not None:
+                try:
+                    await detail_page.close()
+                except Exception:
+                    pass

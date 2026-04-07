@@ -1,5 +1,15 @@
 # AGENTS.md — Agent Guidelines for Job Search Aggregator
 
+> **⚠ MANDATORY READING BEFORE ANY CODE CHANGE ⚠**
+>
+> Every agent that writes code in this repo must first read the three protocol files in `docs/`:
+>
+> 1. **[`docs/known_edge_cases.md`](docs/known_edge_cases.md)** — data shapes, API quirks, and runtime scenarios that have broken naive implementations (with file + line references). Use this as a lookup when designing new scrapers, API endpoints, or scoring logic.
+> 2. **[`docs/guidelines_and_learnings.md`](docs/guidelines_and_learnings.md)** — 18 codified principles (single source of truth, defense in depth, `try/finally` + sentinel, `COALESCE` for partial updates, token-bucket rate limiters, etc.).
+> 3. **[`docs/protocol_to_identify_issues.md`](docs/protocol_to_identify_issues.md)** — seven-phase audit protocol used when auditing a class of bugs. Follow this when the user says "check for bugs" or "audit X" — do NOT start editing files before completing Phase 0–2.
+>
+> After shipping a fix, update `known_edge_cases.md` with the new case and promote patterns into `guidelines_and_learnings.md` when seen more than once.
+
 ## Project Context
 
 This is a Python async CLI tool for aggregating PM job listings across 14 platforms, VC portals, MNC career pages, funding trackers, and automated email outreach. The user is a Senior PM candidate targeting Delhi NCR, 5-7 yrs exp, 40+ LPA, Tech/SaaS/B2B.
@@ -137,6 +147,22 @@ This is a Python async CLI tool for aggregating PM job listings across 14 platfo
 - `applications` — application tracker (shortlist → applied → interviewing → offer)
 - `network_contacts` — imported from LinkedIn CSV
 - `job_connection_matches` — warmth match rows per job + contact
+
+### Audit & Debugging Agent
+**When to use**: User reports "something is wrong," "data looks off," or asks to audit a class of bugs.
+
+**Protocol**: Follow `docs/protocol_to_identify_issues.md` strictly — do NOT start editing files before completing Phase 0 (frame hypothesis), Phase 1 (parallel grep), and Phase 2 (verify sub-agent claims personally with the `Read` tool).
+
+**Key habits**:
+- **Always run Phase 3** (audit existing DB with the proposed filter) before touching production data. This is the step that catches unrelated bugs you weren't looking for.
+- **Never trust a sub-agent's "critical" findings without re-reading the line yourself.** Quote the exact code before proposing the fix.
+- **Fix the class, not the instance**: if one scraper has a page leak, grep all 14 for the same pattern.
+- **Three-layer verification** before declaring done: compile → behavioural smoke test → E2E runtime (server up + curl).
+- **Document the finding**: add to `docs/known_edge_cases.md`; promote to `docs/guidelines_and_learnings.md` on repeat occurrence.
+
+**Canonical examples in this repo**:
+- Location filter audit (April 2026): found 18 bugs across 16 files; `services/location_filter.py` is the single source of truth
+- Resource leak + API audit (April 2026): 20 bugs fixed across scrapers + API server + storage layer using the protocol above
 
 ### Pipeline/CLI Agent
 **When to use**: Modifying the main orchestration logic or adding CLI commands.

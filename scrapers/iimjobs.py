@@ -10,6 +10,7 @@ import structlog
 
 from models.job import Job
 from scrapers.base import BaseScraper
+from services.location_filter import is_acceptable_location
 
 log = structlog.get_logger(__name__)
 
@@ -39,10 +40,15 @@ class IIMJobsScraper(BaseScraper):
 
     async def scrape(self) -> list[Job]:
         all_jobs: list[Job] = []
+        # Pull the configured search query from SearchParams so we stay
+        # consistent with the rest of the pipeline. Fall back to a safe
+        # default if the param list is empty.
+        keywords = getattr(self.search_params, "title_keywords", None) or ["product manager"]
+        query = keywords[0]
         async with httpx.AsyncClient(headers=_HEADERS, timeout=20, follow_redirects=True) as client:
             for page_num in range(MAX_PAGES):
                 params = {
-                    "query": "product manager",
+                    "query": query,
                     "page": page_num,
                     "loc": DELHI_NCR_LOC_ID,
                     "posting": 0,
@@ -135,6 +141,9 @@ class IIMJobsScraper(BaseScraper):
                         pass
 
                 if title and company and apply_link:
+                    if not is_acceptable_location(location):
+                        self._log.debug("item.location_rejected", title=title, location=location)
+                        continue
                     jobs.append(
                         Job(
                             platform="iimjobs",

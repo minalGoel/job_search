@@ -82,12 +82,36 @@ class OutreachDB:
     # ------------------------------------------------------------------
 
     def company_has_outreach(self, company: str) -> bool:
-        """Check if we already have an active outreach for this company."""
-        row = self.conn.execute(
-            "SELECT 1 FROM outreach_contacts WHERE LOWER(company) = LOWER(?) AND status NOT IN ('skipped')",
-            (company,),
-        ).fetchone()
-        return row is not None
+        """Check if we already have an active outreach for this company.
+
+        Uses the scorer's slug normalisation (lowercase, punctuation + legal
+        suffix stripped) so that 'Acme Technologies Pvt Ltd' and 'Acme Inc.'
+        correctly match each other.
+        """
+        # Late import to avoid circular dep
+        try:
+            from services.scoring import _company_slug
+            target_slug = _company_slug(company)
+        except Exception:
+            target_slug = (company or "").strip().lower()
+
+        if not target_slug:
+            return False
+
+        # Pull every active contact (skip 'skipped' only) and compare slugs
+        # in Python. The contact list is small (tens-hundreds) so this is
+        # cheap and avoids shipping the slug logic into SQLite.
+        rows = self.conn.execute(
+            "SELECT company FROM outreach_contacts WHERE status NOT IN ('skipped')"
+        ).fetchall()
+        for (existing,) in rows:
+            try:
+                if _company_slug(existing or "") == target_slug:
+                    return True
+            except Exception:
+                if (existing or "").strip().lower() == target_slug:
+                    return True
+        return False
 
     def insert_contact(self, contact: OutreachContact) -> bool:
         """Insert a contact. Returns True if inserted, False if duplicate."""
@@ -268,6 +292,20 @@ class OutreachDB:
         cursor = self.conn.execute(
             """UPDATE outreach_emails SET status = 'skipped'
                WHERE contact_id = ? AND status IN ('draft', 'approved') AND sequence_step > 1""",
+            (contact_id,),
+        )
+        self.conn.commit()
+        return cursor.rowcount
+
+    def cancel_all_pending_emails(self, contact_id: str) -> int:
+        """Cancel ALL unsent emails (intro + follow-ups) for a contact.
+
+        Used when a contact is skipped at the contact level so no email is
+        ever sent, regardless of sequence step.
+        """
+        cursor = self.conn.execute(
+            """UPDATE outreach_emails SET status = 'skipped'
+               WHERE contact_id = ? AND status IN ('draft', 'approved')""",
             (contact_id,),
         )
         self.conn.commit()

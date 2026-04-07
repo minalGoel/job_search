@@ -50,6 +50,8 @@ class BaseScraper(ABC):
 
         Adds a random delay (2-5 s) before navigation to reduce
         fingerprinting risk, then waits for the network to settle.
+        On navigation failure the page is closed before re-raising
+        so we never leak pages/contexts.
         """
         context = await self.bm.get_context(
             platform=self.name,
@@ -61,17 +63,30 @@ class BaseScraper(ABC):
         self._log.debug("page.delay", seconds=round(delay, 2), url=url)
         await asyncio.sleep(delay)
 
-        await page.goto(url, wait_until="domcontentloaded")
+        try:
+            await page.goto(url, wait_until="domcontentloaded")
+        except Exception:
+            try:
+                await page.close()
+            except Exception:
+                pass
+            raise
         self._log.info("page.loaded", url=url)
         return page
 
-    async def _safe_scrape(self) -> list[Job]:
-        """Run :meth:`scrape` with error handling; return ``[]`` on failure."""
+    async def _safe_scrape(self) -> tuple[list[Job], str | None]:
+        """Run :meth:`scrape` with error handling.
+
+        Returns a tuple of ``(jobs, error_message)`` where ``error_message``
+        is ``None`` on success or the exception string on failure.
+        This lets the orchestrator record the true error per platform
+        instead of silently swallowing it.
+        """
         try:
             self._log.info("scrape.start")
             jobs = await self.scrape()
             self._log.info("scrape.done", count=len(jobs))
-            return jobs
-        except Exception:
+            return jobs, None
+        except Exception as exc:
             self._log.exception("scrape.failed")
-            return []
+            return [], f"{type(exc).__name__}: {exc}"

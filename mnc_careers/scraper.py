@@ -11,13 +11,13 @@ from playwright.async_api import Page
 from browser.context import BrowserManager
 from models.job import Job
 from mnc_careers.registry import MNC_REGISTRY, MNC
+from services.location_filter import is_acceptable_location, explain as explain_location
 
 log = structlog.get_logger(__name__)
 
 PM_KEYWORDS = ["product manager", "product management", "senior pm", "group pm",
                "lead pm", "head of product", "director product", "vp product",
                "principal pm"]
-LOCATION_KEYWORDS = ["delhi", "ncr", "gurugram", "gurgaon", "noida", "india", "remote"]
 
 
 class MNCCareerScraper:
@@ -54,6 +54,7 @@ class MNCCareerScraper:
     async def _scrape_mnc(self, mnc: MNC) -> list[Job]:
         """Scrape a single MNC's career page for PM roles."""
         jobs: list[Job] = []
+        page = None
 
         try:
             page = await self._get_page(mnc.pm_search_url)
@@ -105,14 +106,23 @@ class MNCCareerScraper:
                     if href and not href.startswith("http"):
                         href = urljoin(mnc.pm_search_url, href)
 
-                    # Extract location
+                    # Extract location — NO FALLBACK. If the HTML doesn't tell us,
+                    # we do not assume it's at the MNC's India office.
                     loc_el = el.select_one(
                         "span[class*='location'], div[class*='location'], "
-                        "span[class*='loc']"
+                        "span[class*='loc'], "
+                        "li[class*='location'], p[class*='location']"
                     )
-                    location = loc_el.get_text(strip=True) if loc_el else mnc.delhi_ncr_office
+                    location = loc_el.get_text(strip=True) if loc_el else ""
 
                     if not (title and href):
+                        continue
+
+                    # Reject jobs outside Delhi NCR / global remote
+                    if not is_acceptable_location(location):
+                        self._log.debug("mnc.filtered_location",
+                                        company=mnc.name, title=title,
+                                        reason=explain_location(location))
                         continue
 
                     jobs.append(
@@ -128,9 +138,14 @@ class MNCCareerScraper:
                 except Exception:
                     self._log.exception("mnc.listing_failed", company=mnc.name)
 
-            await page.close()
         except Exception:
             self._log.exception("mnc.page_failed", company=mnc.name)
+        finally:
+            if page is not None:
+                try:
+                    await page.close()
+                except Exception:
+                    pass
 
         return jobs
 

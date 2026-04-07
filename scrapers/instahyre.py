@@ -11,6 +11,7 @@ import structlog
 
 from models.job import Job
 from scrapers.base import BaseScraper
+from services.location_filter import is_acceptable_location
 
 log = structlog.get_logger(__name__)
 
@@ -61,11 +62,18 @@ class InstahyreScraper(BaseScraper):
         async with httpx.AsyncClient(
             headers=_BASE_HEADERS, cookies=cookies, timeout=20, follow_redirects=True
         ) as client:
+            # Pull query and location from SearchParams
+            keywords = getattr(self.search_params, "title_keywords", None) or ["product management"]
+            skill_query = keywords[0]
+            # Instahyre only recognises "Delhi / NCR" as the slug for NCR.
+            # If the user set a single city (Gurugram/Noida), we still
+            # use the NCR umbrella for the API query.
+            location_query = "Delhi / NCR"
             for page_num in range(MAX_PAGES):
                 params = {
                     "isLandingPage": "true",
-                    "jobLocations": "Delhi / NCR",
-                    "skills": "product management",
+                    "jobLocations": location_query,
+                    "skills": skill_query,
                     "job_type": 0,
                     "source": "opportunities",
                     "offset": page_num * PAGE_SIZE,
@@ -130,12 +138,16 @@ class InstahyreScraper(BaseScraper):
                     apply_link = f"https://www.instahyre.com{apply_link}"
 
                 if title and company and apply_link:
+                    loc = str(location).strip()
+                    if not is_acceptable_location(loc):
+                        self._log.debug("item.location_rejected", title=title, location=loc)
+                        continue
                     jobs.append(
                         Job(
                             platform="instahyre",
                             title=title,
                             company=company,
-                            location=str(location).strip(),
+                            location=loc,
                             salary=None,  # Instahyre doesn't expose salary in listings
                             posted_date=None,
                             skills=skills,

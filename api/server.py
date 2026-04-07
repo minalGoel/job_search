@@ -30,8 +30,14 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 # ── Local imports ─────────────────────────────────────────────────────────────
-from storage.db import JobDB
+from storage.db import (
+    JobDB,
+    APPLICATION_STATUSES,
+    STATUSES_COUNTING_AS_APPLIED,
+    application_id_for,
+)
 from outreach.db import OutreachDB
+from services.location_filter import is_acceptable_location
 
 # ── App setup ─────────────────────────────────────────────────────────────────
 app = FastAPI(title="PMHunt Dashboard", version="1.0")
@@ -95,97 +101,100 @@ async def _run_cmd_bg(args: list[str]) -> tuple[int, str]:
 @app.get("/api/stats")
 def get_stats() -> dict:
     db = _jobs_db()
-    stats = db.get_pipeline_stats()
-    last_run = db.get_last_run()
-    sources = db.get_source_quality_stats()
-    db.close()
-
     odb = _outreach_db()
-    outreach_stats = {
-        "contacts_total": len(odb.get_all_contacts()),
-        "emails_draft": len(odb.get_contacts_by_status("draft")),
-        "emails_sent": len(odb.get_contacts_by_status("sent")),
-        "emails_replied": len(odb.get_contacts_by_status("replied")),
-    }
-    # Count emails pending review (status='draft' on outreach_emails table)
     try:
-        rows = odb.conn.execute(
-            "SELECT COUNT(*) FROM outreach_emails WHERE status = 'draft'"
-        ).fetchone()
-        outreach_stats["emails_pending_review"] = rows[0] if rows else 0
-        rows2 = odb.conn.execute(
-            "SELECT COUNT(*) FROM outreach_emails WHERE status = 'sent'"
-        ).fetchone()
-        outreach_stats["emails_sent_count"] = rows2[0] if rows2 else 0
-    except Exception:
-        pass
-    odb.conn.close()
+        stats = db.get_pipeline_stats()
+        last_run = db.get_last_run()
+        sources = db.get_source_quality_stats()
 
-    return {
-        "jobs": stats,
-        "last_run": last_run,
-        "sources": sources,
-        "outreach": outreach_stats,
-        "timestamp": datetime.now().isoformat(),
-    }
+        outreach_stats = {
+            "contacts_total": len(odb.get_all_contacts()),
+            "contacts_replied": len(odb.get_contacts_by_status("replied")),
+        }
+        try:
+            for email_status in ("draft", "approved", "sent", "bounced"):
+                row = odb.conn.execute(
+                    "SELECT COUNT(*) FROM outreach_emails WHERE status = ?",
+                    (email_status,),
+                ).fetchone()
+                outreach_stats[f"emails_{email_status}"] = row[0] if row else 0
+        except Exception:
+            pass
+
+        return {
+            "jobs": stats,
+            "last_run": last_run,
+            "sources": sources,
+            "outreach": outreach_stats,
+            "timestamp": datetime.now().isoformat(),
+        }
+    finally:
+        db.close()
+        try:
+            odb.conn.close()
+        except Exception:
+            pass
 
 
 @app.get("/api/today")
 def get_today_actions() -> dict:
     """Build the daily action queue."""
     db = _jobs_db()
-    actions = []
+    odb = _outreach_db()
+    actions: list[dict] = []
+    try:
+        # New unreviewed high-priority jobs
+        new_high = db.get_top_recommended_jobs(top_n=50, bucket="must_apply")
+        new_high += db.get_top_recommended_jobs(top_n=50, bucket="high")
 
-    # New unreviewed high-priority jobs
-    new_high = db.get_top_recommended_jobs(top_n=50, bucket="must_apply")
-    new_high += db.get_top_recommended_jobs(top_n=50, bucket="high")
-    # Filter to jobs scraped in the last 24h
-    cutoff = (datetime.now().timestamp() - 86400)
-    recent_high = []
-    for j in new_high:
-        try:
-            t = datetime.fromisoformat(j["scraped_at"]).timestamp()
-            if t > cutoff:
-                recent_high.append(j)
-        except Exception:
-            pass
-
-    if recent_high:
-        companies = list({j["company"] for j in recent_high[:5]})
-        actions.append({
-            "type": "review_jobs",
-            "label": f"Review {len(recent_high)} new high-priority jobs",
-            "detail": ", ".join(companies[:4]) + (f" + {len(companies)-4} more" if len(companies) > 4 else ""),
-            "badge": "Apply",
-            "badge_color": "brand",
-            "count": len(recent_high),
-        })
-
-    # Applications needing follow-up (applied > 5 days ago, no status change)
-    apps = db.get_applications()
-    now_ts = datetime.now().timestamp()
-    followups = []
-    for a in apps:
-        if a.get("status") == "applied" and a.get("applied_at"):
+        # Filter to jobs scraped in the last 24h
+        cutoff = datetime.now().timestamp() - 86400
+        recent_high = []
+        for j in new_high:
             try:
-                age_days = (now_ts - datetime.fromisoformat(a["applied_at"]).timestamp()) / 86400
-                if age_days >= 5:
-                    followups.append(a)
+                t = datetime.fromisoformat(j["scraped_at"]).timestamp()
+                if t > cutoff:
+                    recent_high.append(j)
             except Exception:
                 pass
-    if followups:
-        actions.append({
-            "type": "followup",
-            "label": f"Follow up: {followups[0]['company']} application (Day {int((now_ts - datetime.fromisoformat(followups[0]['applied_at']).timestamp())/86400)})",
-            "detail": f"Applied {followups[0].get('applied_at','')[:10]} · No response yet",
-            "badge": "Follow-up",
-            "badge_color": "amber",
-            "count": len(followups),
-        })
 
-    # Interviews scheduled
-    interviews = [a for a in apps if a.get("status") == "interview"]
-    if interviews:
+        if recent_high:
+            companies = list({j["company"] for j in recent_high[:5]})
+            actions.append({
+                "type": "review_jobs",
+                "label": f"Review {len(recent_high)} new high-priority jobs",
+                "detail": ", ".join(companies[:4]) + (f" + {len(companies)-4} more" if len(companies) > 4 else ""),
+                "badge": "Apply",
+                "badge_color": "brand",
+                "count": len(recent_high),
+            })
+
+        # Applications needing follow-up (applied > 5 days ago, no status change)
+        apps = db.get_applications()
+        now_ts = datetime.now().timestamp()
+        followups = []
+        for a in apps:
+            if a.get("status") in STATUSES_COUNTING_AS_APPLIED and a.get("applied_at"):
+                try:
+                    age_days = (now_ts - datetime.fromisoformat(a["applied_at"]).timestamp()) / 86400
+                    if age_days >= 5:
+                        followups.append(a)
+                except Exception:
+                    pass
+        if followups:
+            first = followups[0]
+            age = int((now_ts - datetime.fromisoformat(first["applied_at"]).timestamp()) / 86400)
+            actions.append({
+                "type": "followup",
+                "label": f"Follow up: {first['company']} application (Day {age})",
+                "detail": f"Applied {first.get('applied_at','')[:10]} · No response yet",
+                "badge": "Follow-up",
+                "badge_color": "amber",
+                "count": len(followups),
+            })
+
+        # Interviews scheduled
+        interviews = [a for a in apps if a.get("status") == "interview"]
         for iv in interviews:
             actions.append({
                 "type": "interview_prep",
@@ -195,32 +204,34 @@ def get_today_actions() -> dict:
                 "badge_color": "sky",
             })
 
-    db.close()
+        # Outreach review queue
+        try:
+            pending_emails = odb.conn.execute(
+                """SELECT e.id, c.company, c.contact_name
+                   FROM outreach_emails e
+                   JOIN outreach_contacts c ON c.id = e.contact_id
+                   WHERE e.status = 'draft' LIMIT 10"""
+            ).fetchall()
+            if pending_emails:
+                companies = list({r[1] for r in pending_emails[:3]})
+                actions.append({
+                    "type": "outreach_review",
+                    "label": f"{len(pending_emails)} outreach emails ready to review",
+                    "detail": "Recruiters at " + ", ".join(companies),
+                    "badge": "Review",
+                    "badge_color": "green",
+                    "count": len(pending_emails),
+                })
+        except Exception:
+            pass
 
-    # Outreach review queue
-    odb = _outreach_db()
-    try:
-        pending_emails = odb.conn.execute(
-            """SELECT e.id, c.company, c.contact_name
-               FROM outreach_emails e
-               JOIN outreach_contacts c ON c.id = e.contact_id
-               WHERE e.status = 'draft' LIMIT 10"""
-        ).fetchall()
-        if pending_emails:
-            companies = list({r[1] for r in pending_emails[:3]})
-            actions.append({
-                "type": "outreach_review",
-                "label": f"{len(pending_emails)} outreach emails ready to review",
-                "detail": "Recruiters at " + ", ".join(companies),
-                "badge": "Review",
-                "badge_color": "green",
-                "count": len(pending_emails),
-            })
-    except Exception:
-        pass
-    odb.conn.close()
-
-    return {"actions": actions, "date": datetime.now().strftime("%A, %b %-d")}
+        return {"actions": actions, "date": datetime.now().strftime("%A, %b %-d")}
+    finally:
+        db.close()
+        try:
+            odb.conn.close()
+        except Exception:
+            pass
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -236,81 +247,110 @@ def list_jobs(
     search: str = Query(""),
     sort: str = Query("relevance"),
     include_duplicates: bool = Query(False),
+    location_mode: str = Query("strict", pattern="^(strict|all)$",
+                               description="strict = only NCR + global remote; all = include mislocated legacy rows"),
 ) -> dict:
     db = _jobs_db()
-    conn = db.conn
+    try:
+        conn = db.conn
 
-    conditions = []
-    params: list[Any] = []
+        conditions = []
+        params: list[Any] = []
 
-    if not include_duplicates:
-        conditions.append("is_duplicate = 0")
+        if not include_duplicates:
+            conditions.append("is_duplicate = 0")
 
-    if platform:
-        conditions.append("platform = ?")
-        params.append(platform)
+        if platform:
+            conditions.append("platform = ?")
+            params.append(platform)
 
-    if bucket:
-        conditions.append("priority_bucket = ?")
-        params.append(bucket)
+        if bucket:
+            conditions.append("priority_bucket = ?")
+            params.append(bucket)
 
-    if search:
-        conditions.append("(LOWER(title) LIKE ? OR LOWER(company) LIKE ? OR LOWER(description) LIKE ?)")
-        like = f"%{search.lower()}%"
-        params += [like, like, like]
+        if search:
+            conditions.append("(LOWER(title) LIKE ? OR LOWER(company) LIKE ? OR LOWER(description) LIKE ?)")
+            like = f"%{search.lower()}%"
+            params += [like, like, like]
 
-    where = ("WHERE " + " AND ".join(conditions)) if conditions else ""
+        where = ("WHERE " + " AND ".join(conditions)) if conditions else ""
 
-    sort_map = {
-        "relevance": "priority_score DESC, scraped_at DESC",
-        "date": "scraped_at DESC",
-        "salary": "salary DESC NULLS LAST, scraped_at DESC",
-        "company": "company ASC",
-    }
-    order = sort_map.get(sort, "priority_score DESC, scraped_at DESC")
+        sort_map = {
+            "relevance": "priority_score DESC, scraped_at DESC",
+            "date": "scraped_at DESC",
+            "salary": "salary DESC NULLS LAST, scraped_at DESC",
+            "company": "company ASC",
+        }
+        order = sort_map.get(sort, "priority_score DESC, scraped_at DESC")
 
-    total_row = conn.execute(f"SELECT COUNT(*) FROM jobs {where}", params).fetchone()
-    total = total_row[0] if total_row else 0
+        # NOTE: location filtering happens post-SQL in Python because the
+        # rules (regional restrictions, country codes, etc.) are too rich for
+        # a LIKE clause. We over-fetch when strict mode is on, then trim.
+        if location_mode == "strict":
+            rows = conn.execute(
+                f"SELECT * FROM jobs {where} ORDER BY {order}",
+                params,
+            ).fetchall()
+            all_jobs = [db._row_to_dict(r) for r in rows]
+            filtered = [j for j in all_jobs if is_acceptable_location(j.get("location", ""))]
+            total = len(filtered)
+            offset = (page - 1) * limit
+            jobs = filtered[offset:offset + limit]
+        else:
+            total_row = conn.execute(f"SELECT COUNT(*) FROM jobs {where}", params).fetchone()
+            total = total_row[0] if total_row else 0
+            offset = (page - 1) * limit
+            rows = conn.execute(
+                f"SELECT * FROM jobs {where} ORDER BY {order} LIMIT ? OFFSET ?",
+                params + [limit, offset],
+            ).fetchall()
+            jobs = [db._row_to_dict(r) for r in rows]
 
-    offset = (page - 1) * limit
-    rows = conn.execute(
-        f"SELECT * FROM jobs {where} ORDER BY {order} LIMIT ? OFFSET ?",
-        params + [limit, offset],
-    ).fetchall()
+        # Join with applications table for status.
+        # Ordering by last_action_at DESC and taking the first row per job_id
+        # guarantees determinism even if legacy duplicate application rows
+        # exist for the same job (from before the shared application_id_for
+        # helper landed).
+        app_rows = conn.execute(
+            "SELECT job_id, status, applied_at, last_action_at FROM applications "
+            "ORDER BY COALESCE(last_action_at, '') DESC"
+        ).fetchall()
+        app_status: dict[str, dict] = {}
+        for r in app_rows:
+            if r[0] and r[0] not in app_status:
+                app_status[r[0]] = {"status": r[1], "applied_at": r[2]}
+        for j in jobs:
+            j["application"] = app_status.get(j["id"])
 
-    jobs = [db._row_to_dict(r) for r in rows]
-
-    # Join with applications table for status
-    app_rows = conn.execute("SELECT job_id, status, applied_at FROM applications").fetchall()
-    app_status = {r[0]: {"status": r[1], "applied_at": r[2]} for r in app_rows}
-    for j in jobs:
-        j["application"] = app_status.get(j["id"])
-
-    db.close()
-    return {
-        "jobs": jobs,
-        "total": total,
-        "page": page,
-        "pages": (total + limit - 1) // limit,
-    }
+        return {
+            "jobs": jobs,
+            "total": total,
+            "page": page,
+            "pages": (total + limit - 1) // limit,
+        }
+    finally:
+        db.close()
 
 
 @app.get("/api/jobs/{job_id}")
 def get_job(job_id: str) -> dict:
     db = _jobs_db()
-    job = db.get_job_by_id(job_id)
-    if not job:
-        raise HTTPException(status_code=404, detail="Job not found")
-    matches = db.get_connection_matches_for_job(job_id)
-    job["connection_matches"] = matches
+    try:
+        job = db.get_job_by_id(job_id)
+        if not job:
+            raise HTTPException(status_code=404, detail="Job not found")
+        matches = db.get_connection_matches_for_job(job_id)
+        job["connection_matches"] = matches
 
-    # application status
-    row = db.conn.execute(
-        "SELECT * FROM applications WHERE job_id = ?", (job_id,)
-    ).fetchone()
-    job["application"] = dict(row) if row else None
-    db.close()
-    return job
+        # application status
+        row = db.conn.execute(
+            "SELECT * FROM applications WHERE job_id = ? ORDER BY COALESCE(last_action_at, '') DESC LIMIT 1",
+            (job_id,),
+        ).fetchone()
+        job["application"] = dict(row) if row else None
+        return job
+    finally:
+        db.close()
 
 
 class ShortlistRequest(BaseModel):
@@ -320,24 +360,26 @@ class ShortlistRequest(BaseModel):
 @app.post("/api/jobs/{job_id}/shortlist")
 def shortlist_job(job_id: str, req: ShortlistRequest = ShortlistRequest()) -> dict:
     db = _jobs_db()
-    job = db.get_job_by_id(job_id)
-    if not job:
-        raise HTTPException(status_code=404, detail="Job not found")
+    try:
+        job = db.get_job_by_id(job_id)
+        if not job:
+            raise HTTPException(status_code=404, detail="Job not found")
 
-    now = datetime.now().isoformat()
-    app_id = f"app_{job_id}"
-    db.upsert_application({
-        "id": app_id,
-        "job_id": job_id,
-        "company": job["company"],
-        "title": job["title"],
-        "status": "shortlisted",
-        "applied_at": None,
-        "last_action_at": now,
-        "notes": req.notes,
-    })
-    db.close()
-    return {"ok": True, "app_id": app_id}
+        now = datetime.now().isoformat()
+        app_id = application_id_for(job_id)
+        db.upsert_application({
+            "id": app_id,
+            "job_id": job_id,
+            "company": job["company"],
+            "title": job["title"],
+            "status": "shortlisted",
+            "applied_at": None,  # COALESCE in upsert preserves existing value
+            "last_action_at": now,
+            "notes": req.notes,
+        })
+        return {"ok": True, "app_id": app_id}
+    finally:
+        db.close()
 
 
 class StatusRequest(BaseModel):
@@ -347,38 +389,48 @@ class StatusRequest(BaseModel):
 
 @app.post("/api/jobs/{job_id}/status")
 def update_job_status(job_id: str, req: StatusRequest) -> dict:
-    valid = {"shortlisted", "applied", "screening", "interview", "offer", "rejected", "skipped"}
-    if req.status not in valid:
-        raise HTTPException(status_code=400, detail=f"Invalid status. Must be one of: {valid}")
+    if req.status not in APPLICATION_STATUSES:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid status. Must be one of: {sorted(APPLICATION_STATUSES)}",
+        )
 
     db = _jobs_db()
-    job = db.get_job_by_id(job_id)
-    if not job:
-        raise HTTPException(status_code=404, detail="Job not found")
+    try:
+        job = db.get_job_by_id(job_id)
+        if not job:
+            raise HTTPException(status_code=404, detail="Job not found")
 
-    now = datetime.now().isoformat()
-    app_id = f"app_{job_id}"
-    db.upsert_application({
-        "id": app_id,
-        "job_id": job_id,
-        "company": job["company"],
-        "title": job["title"],
-        "status": req.status,
-        "applied_at": now if req.status == "applied" else None,
-        "last_action_at": now,
-        "notes": req.notes,
-    })
-    db.close()
-    return {"ok": True, "status": req.status}
+        now = datetime.now().isoformat()
+        app_id = application_id_for(job_id)
+        # Only set applied_at when entering a status that counts as applied,
+        # AND only if the row doesn't already have one (upsert's COALESCE
+        # handles the "already set" case).
+        new_applied_at = now if req.status in STATUSES_COUNTING_AS_APPLIED else None
+        db.upsert_application({
+            "id": app_id,
+            "job_id": job_id,
+            "company": job["company"],
+            "title": job["title"],
+            "status": req.status,
+            "applied_at": new_applied_at,
+            "last_action_at": now,
+            "notes": req.notes,
+        })
+        return {"ok": True, "status": req.status}
+    finally:
+        db.close()
 
 
 @app.delete("/api/jobs/{job_id}/shortlist")
 def remove_shortlist(job_id: str) -> dict:
     db = _jobs_db()
-    db.conn.execute("DELETE FROM applications WHERE job_id = ?", (job_id,))
-    db.conn.commit()
-    db.close()
-    return {"ok": True}
+    try:
+        db.conn.execute("DELETE FROM applications WHERE job_id = ?", (job_id,))
+        db.conn.commit()
+        return {"ok": True}
+    finally:
+        db.close()
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -387,29 +439,58 @@ def remove_shortlist(job_id: str) -> dict:
 
 @app.get("/api/applications")
 def list_applications(status: str = Query("")) -> list[dict]:
+    if status and status not in APPLICATION_STATUSES:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid status filter. Must be one of: {sorted(APPLICATION_STATUSES)}",
+        )
     db = _jobs_db()
-    apps = db.get_applications(status or None)
-
-    # Enrich with job details
-    enriched = []
-    for a in apps:
-        job = db.get_job_by_id(a.get("job_id", "")) if a.get("job_id") else None
-        enriched.append({**a, "job": job})
-    db.close()
-    return enriched
+    try:
+        apps = db.get_applications(status or None)
+        # Enrich with job details
+        enriched = []
+        for a in apps:
+            job = db.get_job_by_id(a.get("job_id", "")) if a.get("job_id") else None
+            enriched.append({**a, "job": job})
+        return enriched
+    finally:
+        db.close()
 
 
 @app.post("/api/applications/{app_id}/status")
 def update_application_status(app_id: str, req: StatusRequest) -> dict:
+    if req.status not in APPLICATION_STATUSES:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid status. Must be one of: {sorted(APPLICATION_STATUSES)}",
+        )
     db = _jobs_db()
-    now = datetime.now().isoformat()
-    db.conn.execute(
-        "UPDATE applications SET status = ?, last_action_at = ?, notes = COALESCE(?, notes) WHERE id = ?",
-        (req.status, now, req.notes, app_id),
-    )
-    db.conn.commit()
-    db.close()
-    return {"ok": True}
+    try:
+        now = datetime.now().isoformat()
+        # Only stamp applied_at if entering an "applied" state AND we don't
+        # already have one (COALESCE via the UPDATE below).
+        set_applied = req.status in STATUSES_COUNTING_AS_APPLIED
+        if set_applied:
+            db.conn.execute(
+                """UPDATE applications
+                   SET status = ?,
+                       last_action_at = ?,
+                       applied_at = COALESCE(applied_at, ?),
+                       notes = COALESCE(?, notes)
+                   WHERE id = ?""",
+                (req.status, now, now, req.notes, app_id),
+            )
+        else:
+            db.conn.execute(
+                """UPDATE applications
+                   SET status = ?, last_action_at = ?, notes = COALESCE(?, notes)
+                   WHERE id = ?""",
+                (req.status, now, req.notes, app_id),
+            )
+        db.conn.commit()
+        return {"ok": True}
+    finally:
+        db.close()
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -440,24 +521,24 @@ LOGIN_REQUIRED = {"linkedin", "instahyre", "cutshort", "weekday"}
 @app.get("/api/scrapers")
 def get_scrapers() -> list[dict]:
     db = _jobs_db()
+    try:
+        # Per-platform job counts
+        counts = {
+            r[0]: r[1]
+            for r in db.conn.execute(
+                "SELECT platform, COUNT(*) FROM jobs WHERE is_duplicate = 0 GROUP BY platform"
+            ).fetchall()
+        }
 
-    # Per-platform job counts
-    counts = {
-        r[0]: r[1]
-        for r in db.conn.execute(
-            "SELECT platform, COUNT(*) FROM jobs WHERE is_duplicate = 0 GROUP BY platform"
-        ).fetchall()
-    }
-
-    # Last scrape per platform (from jobs table)
-    last_scraped = {
-        r[0]: r[1]
-        for r in db.conn.execute(
-            "SELECT platform, MAX(scraped_at) FROM jobs GROUP BY platform"
-        ).fetchall()
-    }
-
-    db.close()
+        # Last scrape per platform (from jobs table)
+        last_scraped = {
+            r[0]: r[1]
+            for r in db.conn.execute(
+                "SELECT platform, MAX(scraped_at) FROM jobs GROUP BY platform"
+            ).fetchall()
+        }
+    finally:
+        db.close()
 
     # Cookie health
     cookie_health: dict[str, str] = {}
@@ -571,9 +652,10 @@ async def ws_command(ws: WebSocket, cmd: str = Query(...)):
 @app.get("/api/outreach/contacts")
 def list_contacts() -> list[dict]:
     odb = _outreach_db()
-    contacts = odb.get_all_contacts()
-    odb.conn.close()
-    return contacts
+    try:
+        return odb.get_all_contacts()
+    finally:
+        odb.close()
 
 
 @app.get("/api/outreach/emails")
@@ -597,11 +679,11 @@ def list_emails(status: str = Query("")) -> list[dict]:
                    JOIN outreach_contacts c ON c.id = e.contact_id
                    ORDER BY e.scheduled_send_at DESC""",
             ).fetchall()
-        result = [dict(r) for r in rows]
+        return [dict(r) for r in rows]
     except Exception:
-        result = []
-    odb.conn.close()
-    return result
+        return []
+    finally:
+        odb.close()
 
 
 @app.get("/api/outreach/stats")
@@ -610,10 +692,10 @@ def outreach_stats() -> dict:
     stats: dict[str, Any] = {}
     try:
         for s in ("new", "enriched", "draft", "approved", "sent", "replied", "skipped"):
-            stats[s] = odb.conn.execute(
+            stats[f"contacts_{s}"] = odb.conn.execute(
                 "SELECT COUNT(*) FROM outreach_contacts WHERE status = ?", (s,)
             ).fetchone()[0]
-        for es in ("draft", "approved", "sent"):
+        for es in ("draft", "approved", "sent", "bounced"):
             stats[f"emails_{es}"] = odb.conn.execute(
                 "SELECT COUNT(*) FROM outreach_emails WHERE status = ?", (es,)
             ).fetchone()[0]
@@ -623,7 +705,8 @@ def outreach_stats() -> dict:
         stats["credits_used"] = {r[0]: r[1] for r in credits}
     except Exception:
         pass
-    odb.conn.close()
+    finally:
+        odb.close()
     return stats
 
 
@@ -636,34 +719,48 @@ class EmailEditRequest(BaseModel):
 @app.post("/api/outreach/emails/{email_id}/approve")
 def approve_email(email_id: str) -> dict:
     odb = _outreach_db()
-    odb.update_email_status(email_id, "approved")
-    odb.conn.close()
-    return {"ok": True}
+    try:
+        odb.update_email_status(email_id, "approved")
+        return {"ok": True}
+    finally:
+        odb.close()
 
 
 @app.post("/api/outreach/emails/{email_id}/skip")
 def skip_email(email_id: str) -> dict:
     odb = _outreach_db()
-    odb.update_email_status(email_id, "skipped")
-    odb.conn.close()
-    return {"ok": True}
+    try:
+        odb.update_email_status(email_id, "skipped")
+        # Sync contact terminal status (mirrors reviewer.py behaviour)
+        contact_id = odb.get_contact_id_for_email(email_id)
+        if contact_id and odb.all_emails_terminal_for_contact(contact_id):
+            odb.update_contact_status(contact_id, "skipped")
+        return {"ok": True}
+    finally:
+        odb.close()
 
 
 @app.post("/api/outreach/emails/{email_id}/edit")
 def edit_email(email_id: str, req: EmailEditRequest) -> dict:
     odb = _outreach_db()
-    body_html = req.body_html or req.body_plain.replace("\n", "<br>")
-    odb.update_email_content(email_id, req.subject, req.body_plain, body_html)
-    odb.conn.close()
-    return {"ok": True}
+    try:
+        body_html = req.body_html or req.body_plain.replace("\n", "<br>")
+        odb.update_email_content(email_id, req.subject, req.body_plain, body_html)
+        return {"ok": True}
+    finally:
+        odb.close()
 
 
 @app.post("/api/outreach/contacts/{contact_id}/skip")
 def skip_contact(contact_id: str) -> dict:
     odb = _outreach_db()
-    odb.update_contact_status(contact_id, "skipped")
-    odb.conn.close()
-    return {"ok": True}
+    try:
+        odb.update_contact_status(contact_id, "skipped")
+        # Cancel all pending/approved emails for this contact so none are sent
+        odb.cancel_all_pending_emails(contact_id)
+        return {"ok": True}
+    finally:
+        odb.close()
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -700,40 +797,36 @@ def get_funding() -> list[dict]:
 def get_vc_jobs(page: int = 1, limit: int = 50) -> dict:
     """Return jobs from platforms prefixed 'vc_' or scraped by VC portal scraper."""
     db = _jobs_db()
-    conn = db.conn
-
-    # VC portal jobs are stored with platform starting with "vc_" or specific known names
-    total_row = conn.execute(
-        "SELECT COUNT(*) FROM jobs WHERE is_duplicate = 0 AND (platform LIKE 'vc_%' OR platform = 'vc_portals')"
-    ).fetchone()
-    total = total_row[0] if total_row else 0
-
-    offset = (page - 1) * limit
-    rows = conn.execute(
-        """SELECT * FROM jobs WHERE is_duplicate = 0 AND (platform LIKE 'vc_%' OR platform = 'vc_portals')
-           ORDER BY scraped_at DESC LIMIT ? OFFSET ?""",
-        (limit, offset),
-    ).fetchall()
-    jobs = [db._row_to_dict(r) for r in rows]
-    db.close()
-    return {"jobs": jobs, "total": total}
+    try:
+        conn = db.conn
+        # Fetch all VC jobs (no LIMIT here — we need to filter first, then paginate)
+        rows = conn.execute(
+            """SELECT * FROM jobs WHERE is_duplicate = 0 AND (platform LIKE 'vc_%' OR platform = 'vc_portals')
+               ORDER BY scraped_at DESC""",
+        ).fetchall()
+        all_jobs = [db._row_to_dict(r) for r in rows]
+        # Apply location filter — total must reflect the filtered set for correct pagination
+        filtered = [j for j in all_jobs if is_acceptable_location(j.get("location", ""))]
+        total = len(filtered)
+        offset = (page - 1) * limit
+        jobs = filtered[offset:offset + limit]
+        return {"jobs": jobs, "total": total}
+    finally:
+        db.close()
 
 
 @app.get("/api/vc-registry")
 def get_vc_registry() -> list[dict]:
     """Return the VC portal registry metadata."""
     try:
-        from vc_portals.registry import VC_PORTALS
+        from vc_portals.registry import VC_REGISTRY
         return [
             {
                 "name": v.name,
                 "job_portal_url": v.job_portal_url,
                 "job_portal_type": getattr(v, "job_portal_type", "custom"),
-                "location": v.location,
-                "stage_focus": v.stage_focus,
-                "notes": v.notes,
             }
-            for v in VC_PORTALS
+            for v in VC_REGISTRY
         ]
     except Exception as exc:
         return [{"error": str(exc)}]
@@ -775,7 +868,8 @@ def get_analytics() -> dict:
         outreach = {"sent": sent, "replied": replied, "reply_rate": round(replied / sent * 100, 1) if sent else 0}
     except Exception:
         pass
-    odb.conn.close()
+    finally:
+        odb.close()
 
     # Cookie health
     cookie_statuses: dict[str, str] = {}
@@ -811,23 +905,25 @@ def get_analytics() -> dict:
 @app.get("/api/runs")
 def get_runs(limit: int = 10) -> list[dict]:
     db = _jobs_db()
-    rows = db.conn.execute(
-        "SELECT * FROM runs ORDER BY run_id DESC LIMIT ?", (limit,)
-    ).fetchall()
-    result = []
-    for r in rows:
-        d = dict(r)
-        try:
-            d["platforms_scraped"] = json.loads(d.get("platforms_scraped") or "[]")
-        except Exception:
-            d["platforms_scraped"] = []
-        try:
-            d["errors"] = json.loads(d.get("errors") or "{}")
-        except Exception:
-            d["errors"] = {}
-        result.append(d)
-    db.close()
-    return result
+    try:
+        rows = db.conn.execute(
+            "SELECT * FROM runs ORDER BY run_id DESC LIMIT ?", (limit,)
+        ).fetchall()
+        result = []
+        for r in rows:
+            d = dict(r)
+            try:
+                d["platforms_scraped"] = json.loads(d.get("platforms_scraped") or "[]")
+            except Exception:
+                d["platforms_scraped"] = []
+            try:
+                d["errors"] = json.loads(d.get("errors") or "{}")
+            except Exception:
+                d["errors"] = {}
+            result.append(d)
+        return result
+    finally:
+        db.close()
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -849,7 +945,7 @@ def get_recommendations(
         remote_only=remote_only,
     )
     db.close()
-    return jobs
+    return [j for j in jobs if is_acceptable_location(j.get("location", ""))]
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -859,23 +955,24 @@ def get_recommendations(
 @app.get("/api/jobs/{job_id}/draft")
 def get_draft(job_id: str, type: str = Query("recruiter"), mutual: str = Query("")) -> dict:
     """Return a draft outreach message for a job."""
+    db = _jobs_db()
     try:
-        from services.outreach_writer import OutreachWriter
-        writer = OutreachWriter()
-        db = _jobs_db()
+        from services.outreach_writer import draft_message
         job = db.get_job_by_id(job_id)
-        db.close()
         if not job:
             raise HTTPException(status_code=404, detail="Job not found")
-
-        msg = writer.draft(
+        msg = draft_message(
             job=job,
             message_type=type,
-            mutual_connection=mutual or None,
+            mutual_name=mutual or "",
         )
         return {"draft": msg, "job_id": job_id, "type": type}
+    except HTTPException:
+        raise
     except Exception as exc:
         return {"draft": f"[Draft unavailable: {exc}]", "job_id": job_id, "type": type}
+    finally:
+        db.close()
 
 
 # ═══════════════════════════════════════════════════════════════════════════════

@@ -9,45 +9,50 @@ from bs4 import BeautifulSoup
 
 from models.job import Job
 from scrapers.base import BaseScraper
+from services.location_filter import is_acceptable_location
 
 log = structlog.get_logger(__name__)
-
-# Cutshort SSR URL for Product Manager jobs in Delhi NCR
-_DELHI_NCR_URL = "https://cutshort.io/jobs/product-manager-jobs-in-delhi-ncr-gurgaon-noida"
-
 
 class CutshortScraper(BaseScraper):
     name: str = "cutshort"
     requires_login: bool = True
 
     async def scrape(self) -> list[Job]:
-        self._log.info("page.scraping", url=_DELHI_NCR_URL)
+        keyword_slug = self.search_params.title_keywords[0].replace(" ", "-")
+        url = f"https://cutshort.io/jobs/{keyword_slug}-jobs-in-delhi-ncr-gurgaon-noida"
+        self._log.info("page.scraping", url=url)
 
-        page = await self._get_page(_DELHI_NCR_URL)
-
-        # Check if redirected to login
-        if "login" in page.url.lower() or "signin" in page.url.lower():
-            self._log.warning("session.expired", redirect_url=page.url)
-            await page.close()
-            return []
-
-        # Wait for Next.js hydration
+        page = None
         try:
-            await page.wait_for_selector("#__NEXT_DATA__", timeout=12_000)
-        except Exception:
-            self._log.debug("wait.next_data.timeout")
+            page = await self._get_page(url)
 
-        await asyncio.sleep(2)
+            # Check if redirected to login
+            if "login" in page.url.lower() or "signin" in page.url.lower():
+                self._log.warning("session.expired", redirect_url=page.url)
+                return []
 
-        jobs = await self._parse_next_data(page)
+            # Wait for Next.js hydration
+            try:
+                await page.wait_for_selector("#__NEXT_DATA__", timeout=12_000)
+            except Exception:
+                self._log.debug("wait.next_data.timeout")
 
-        if not jobs:
-            # Fallback: HTML parsing
-            html = await page.content()
-            jobs = self._parse_html(html)
+            await asyncio.sleep(2)
 
-        await page.close()
-        return jobs
+            jobs = await self._parse_next_data(page)
+
+            if not jobs:
+                # Fallback: HTML parsing
+                html = await page.content()
+                jobs = self._parse_html(html)
+
+            return jobs
+        finally:
+            if page is not None:
+                try:
+                    await page.close()
+                except Exception:
+                    pass
 
     async def _parse_next_data(self, page: Any) -> list[Job]:
         """Extract jobs from Next.js __NEXT_DATA__ JSON."""
@@ -114,12 +119,16 @@ class CutshortScraper(BaseScraper):
                     apply_link = f"https://cutshort.io{apply_link}"
 
                 if title and company and apply_link:
+                    loc = str(location).strip()
+                    if not is_acceptable_location(loc):
+                        self._log.debug("cutshort.location_rejected", title=title, location=loc)
+                        continue
                     jobs.append(
                         Job(
                             platform="cutshort",
                             title=title,
                             company=company,
-                            location=str(location).strip(),
+                            location=loc,
                             salary=salary.strip() if salary else None,
                             posted_date=None,
                             skills=skills,
@@ -162,7 +171,16 @@ class CutshortScraper(BaseScraper):
                 )
                 company = company_el.get_text(strip=True) if company_el else ""
 
+                location_el = card.select_one(
+                    "span[class*='location'], div[class*='location'], p[class*='location']"
+                )
+                location = location_el.get_text(strip=True) if location_el else None
+
                 if not (title and apply_link):
+                    continue
+
+                if not is_acceptable_location(location):
+                    self._log.debug("card.location_rejected", title=title, location=location)
                     continue
 
                 jobs.append(
@@ -170,7 +188,7 @@ class CutshortScraper(BaseScraper):
                         platform="cutshort",
                         title=title,
                         company=company,
-                        location="Delhi NCR",
+                        location=location or "",
                         salary=None,
                         posted_date=None,
                         skills=[],

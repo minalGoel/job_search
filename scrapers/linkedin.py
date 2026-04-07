@@ -10,6 +10,7 @@ from bs4 import BeautifulSoup
 
 from models.job import Job
 from scrapers.base import BaseScraper
+from services.location_filter import is_acceptable_location, explain as explain_location
 
 log = structlog.get_logger(__name__)
 
@@ -72,40 +73,46 @@ class LinkedInScraper(BaseScraper):
             # Extra delay for LinkedIn
             await asyncio.sleep(random.uniform(3.0, 7.0))
 
+            page = None
             try:
-                page = await self._get_page(url)
-            except Exception:
-                self._log.warning("page.blocked_or_failed", page=page_num)
-                break
+                try:
+                    page = await self._get_page(url)
+                except Exception:
+                    self._log.warning("page.blocked_or_failed", page=page_num)
+                    break
 
-            # Check for auth wall
-            current_url = page.url
-            if "authwall" in current_url or "login" in current_url:
-                self._log.warning("page.auth_wall", url=current_url)
-                await page.close()
-                break
+                # Check for auth wall
+                current_url = page.url
+                if "authwall" in current_url or "login" in current_url:
+                    self._log.warning("page.auth_wall", url=current_url)
+                    break
 
-            # Scroll down to load lazy content
-            for _ in range(3):
-                await page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
-                await asyncio.sleep(1.5)
+                # Scroll down to load lazy content
+                for _ in range(3):
+                    await page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
+                    await asyncio.sleep(1.5)
 
-            html = await page.content()
-            soup = BeautifulSoup(html, "html.parser")
+                html = await page.content()
+                soup = BeautifulSoup(html, "html.parser")
 
-            # Logged-in selectors (confirmed April 2026): div.job-card-container
-            cards = (
-                soup.select("div.job-card-container")
-                or soup.select("div.base-card")
-                or soup.select("li.result-card")
-                or soup.select("div[class*='job-search-card']")
-                or soup.select("ul.jobs-search__results-list > li")
-            )
+                # Logged-in selectors (confirmed April 2026): div.job-card-container
+                cards = (
+                    soup.select("div.job-card-container")
+                    or soup.select("div.base-card")
+                    or soup.select("li.result-card")
+                    or soup.select("div[class*='job-search-card']")
+                    or soup.select("ul.jobs-search__results-list > li")
+                )
 
-            self._log.info("html.cards_found", count=len(cards), page=page_num)
-            if not cards:
-                await page.close()
-                break
+                self._log.info("html.cards_found", count=len(cards), page=page_num)
+                if not cards:
+                    break
+            finally:
+                if page is not None:
+                    try:
+                        await page.close()
+                    except Exception:
+                        pass
 
             for card in cards:
                 try:
@@ -140,6 +147,14 @@ class LinkedInScraper(BaseScraper):
                     if not (title and apply_link):
                         continue
 
+                    if not is_acceptable_location(location):
+                        self._log.debug(
+                            "linkedin.filtered_location",
+                            title=title, company=company,
+                            reason=explain_location(location),
+                        )
+                        continue
+
                     # Fetch description for a limited number of jobs
                     description = ""
                     if detail_fetches < MAX_DETAIL_FETCHES and apply_link:
@@ -161,7 +176,6 @@ class LinkedInScraper(BaseScraper):
                 except Exception:
                     self._log.exception("card.parse_failed")
 
-            await page.close()
             self._log.info("page.collected", page=page_num, jobs=len(all_jobs))
 
         return all_jobs
@@ -169,13 +183,13 @@ class LinkedInScraper(BaseScraper):
     async def _fetch_description(self, url: str) -> str:
         if not url:
             return ""
+        page = None
         try:
             await asyncio.sleep(random.uniform(3.0, 6.0))
             page = await self._get_page(url)
 
             # Check for auth wall
             if "authwall" in page.url or "login" in page.url:
-                await page.close()
                 return ""
 
             html = await page.content()
@@ -184,9 +198,13 @@ class LinkedInScraper(BaseScraper):
                 "div.show-more-less-html__markup, div[class*='description__text'], "
                 "section[class*='description'] div"
             )
-            description = jd_el.get_text(separator="\n", strip=True) if jd_el else ""
-            await page.close()
-            return description
+            return jd_el.get_text(separator="\n", strip=True) if jd_el else ""
         except Exception:
             self._log.debug("description.fetch_failed", url=url)
             return ""
+        finally:
+            if page is not None:
+                try:
+                    await page.close()
+                except Exception:
+                    pass

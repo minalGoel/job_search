@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import sqlite3
 from datetime import datetime
@@ -7,6 +8,39 @@ from pathlib import Path
 from typing import Optional
 
 from models.job import Job
+
+
+# ─── Canonical application status vocabulary ──────────────────────────────────
+# Used by BOTH the CLI (main.py) and the API (api/server.py). Any place that
+# validates status should import APPLICATION_STATUSES from here so we never
+# end up with two divergent vocabularies again.
+APPLICATION_STATUSES: frozenset[str] = frozenset({
+    "to_review",     # initial state (not yet triaged)
+    "shortlisted",   # saved to tracker, not yet applied
+    "reached_out",   # outreach message sent, no application yet
+    "applied",       # application submitted
+    "screening",     # recruiter screen scheduled or in progress
+    "interview",     # interview stage (any round)
+    "offer",         # offer received
+    "rejected",      # rejected by company or withdrawn
+    "parked",        # deprioritised, revisit later
+    "skipped",       # user skipped / not interested
+})
+
+# Statuses that should set applied_at when first entered
+STATUSES_COUNTING_AS_APPLIED: frozenset[str] = frozenset({
+    "applied", "screening", "interview", "offer",
+})
+
+
+def application_id_for(job_id: str) -> str:
+    """Deterministic application ID for a given job_id.
+
+    Single source of truth — both CLI (main.py shortlist) and API
+    (api/server.py) call this so a single job never ends up with two
+    application rows under different IDs.
+    """
+    return hashlib.sha256(f"app|{job_id}".encode()).hexdigest()[:16]
 
 
 class JobDB:
@@ -296,7 +330,10 @@ class JobDB:
             conditions.append("priority_bucket = ?")
             params.append(bucket)
         elif not include_low:
-            conditions.append("priority_bucket != 'low'")
+            # Exclude both 'low' AND '' (unscored). priority_bucket = '' is the
+            # sentinel for never-scored jobs; they shouldn't be treated as
+            # recommendable until the scorer has actually run on them.
+            conditions.append("priority_bucket NOT IN ('low', '')")
 
         if platform:
             conditions.append("platform = ?")
@@ -322,6 +359,13 @@ class JobDB:
     # ------------------------------------------------------------------
 
     def upsert_application(self, app: dict) -> None:
+        """Insert or update an application row.
+
+        Uses COALESCE so that calling this with ``applied_at=None`` on an
+        existing row does NOT wipe out a previously-recorded apply
+        timestamp. Same for notes / referral / cover letter — they are
+        only overwritten when the caller explicitly provides a new value.
+        """
         self.conn.execute(
             """INSERT INTO applications
                (id, job_id, company, title, status, applied_at, resume_version,
@@ -330,10 +374,14 @@ class JobDB:
                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                ON CONFLICT(id) DO UPDATE SET
                 status = excluded.status,
-                applied_at = excluded.applied_at,
-                next_followup_at = excluded.next_followup_at,
-                last_action_at = excluded.last_action_at,
-                notes = excluded.notes""",
+                applied_at = COALESCE(excluded.applied_at, applications.applied_at),
+                resume_version = COALESCE(excluded.resume_version, applications.resume_version),
+                cover_letter_path = COALESCE(excluded.cover_letter_path, applications.cover_letter_path),
+                outreach_email_id = COALESCE(excluded.outreach_email_id, applications.outreach_email_id),
+                referral_contact = COALESCE(excluded.referral_contact, applications.referral_contact),
+                next_followup_at = COALESCE(excluded.next_followup_at, applications.next_followup_at),
+                last_action_at = COALESCE(excluded.last_action_at, applications.last_action_at),
+                notes = COALESCE(excluded.notes, applications.notes)""",
             (
                 app["id"], app.get("job_id"), app.get("company"), app.get("title"),
                 app.get("status", "to_review"), app.get("applied_at"),
@@ -476,18 +524,14 @@ class JobDB:
         """Return contacts whose normalised company slug contains or equals company_slug.
 
         Matching is done in Python (not SQL) for consistency with the normalisation
-        logic in services/connection_matcher.py.
+        logic in services/scoring._company_slug().
         """
+        from services.scoring import _company_slug
+
         all_contacts = self.get_network_contacts()
-        import re as _re
-
-        def _slug(name: str) -> str:
-            s = _re.sub(r"[^a-z0-9 ]", "", name.strip().lower())
-            return _re.sub(r"\s+", " ", s).strip()
-
         result = []
         for c in all_contacts:
-            slug = _slug(c.get("company", ""))
+            slug = _company_slug(c.get("company", ""))
             if slug and (slug == company_slug or company_slug in slug or slug in company_slug):
                 result.append(c)
         return result

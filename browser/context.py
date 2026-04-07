@@ -121,8 +121,23 @@ class BrowserManager:
             log.info("browser.context.restoring_cookies", platform=platform)
 
         context = await self._browser.new_context(**kwargs)
+
+        # playwright-stealth API migration (v2+): method is apply_stealth (async).
+        # Older releases exposed apply_stealth_async / stealth_async. Try each.
         stealth = Stealth()
-        await stealth.apply_stealth_async(context)
+        apply_fn = (
+            getattr(stealth, "apply_stealth", None)
+            or getattr(stealth, "apply_stealth_async", None)
+        )
+        if apply_fn is None:
+            log.warning("stealth.no_apply_method", note="playwright-stealth API changed")
+        else:
+            try:
+                result = apply_fn(context)
+                if hasattr(result, "__await__"):
+                    await result
+            except Exception:
+                log.exception("stealth.apply_failed", platform=platform)
 
         self._contexts[platform] = context
         log.info("browser.context.created", platform=platform, user_agent=user_agent)

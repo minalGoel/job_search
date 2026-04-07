@@ -33,6 +33,7 @@ class ApolloClient:
         self.api_key = settings.APOLLO_API_KEY
         self.rate_limit = settings.APOLLO_RATE_LIMIT_PER_MINUTE
         self._request_count = 0
+        self._last_call_ts: float = 0.0
         self._log = log.bind(client="apollo")
 
     async def search_contacts(
@@ -151,8 +152,24 @@ class ApolloClient:
         return "other"
 
     async def _rate_limit(self) -> None:
-        """Simple rate limiter."""
+        """Token-bucket style limiter: spaces calls by (60/rate_limit) seconds.
+
+        Prevents the old bug where:
+          1. rate_limit=0 crashed with ZeroDivisionError
+          2. The "sleep 60 every Nth call" pattern let N calls burst back-to-back
+        """
         self._request_count += 1
-        if self._request_count % self.rate_limit == 0:
-            self._log.debug("apollo.rate_limit_pause")
-            await asyncio.sleep(60)
+        if self.rate_limit is None or self.rate_limit <= 0:
+            # Limiter disabled by config
+            return
+
+        # Minimum spacing between consecutive calls
+        min_delay = 60.0 / float(self.rate_limit)
+
+        loop = asyncio.get_event_loop()
+        now = loop.time()
+        if self._last_call_ts > 0.0:
+            elapsed = now - self._last_call_ts
+            if elapsed < min_delay:
+                await asyncio.sleep(min_delay - elapsed)
+        self._last_call_ts = loop.time()

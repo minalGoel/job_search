@@ -97,8 +97,11 @@ def render_email(
     }
 
     try:
-        subject = Template(tmpl["subject"]).safe_substitute(variables)
-        body_plain = Template(tmpl["body"]).safe_substitute(variables)
+        subject = Template(tmpl["subject"]).substitute(variables)
+        body_plain = Template(tmpl["body"]).substitute(variables)
+    except (KeyError, ValueError) as e:
+        log.error("templates.missing_variable", template=template_name, key=str(e))
+        return None
     except Exception:
         log.exception("templates.render_failed", template=template_name)
         return None

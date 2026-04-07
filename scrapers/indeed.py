@@ -9,6 +9,7 @@ import structlog
 from bs4 import BeautifulSoup
 from models.job import Job
 from scrapers.base import BaseScraper
+from services.location_filter import is_acceptable_location, explain as explain_location
 
 log = structlog.get_logger(__name__)
 
@@ -73,8 +74,17 @@ class IndeedScraper(BaseScraper):
         return all_jobs
 
     async def _scrape_page(self, url: str, page_num: int) -> list[Job]:
-        page = await self._get_page(url)
-        html = await page.content()
+        page = None
+        try:
+            page = await self._get_page(url)
+            html = await page.content()
+        finally:
+            if page is not None:
+                try:
+                    await page.close()
+                except Exception:
+                    pass
+
         soup = BeautifulSoup(html, "html.parser")
         jobs: list[Job] = []
 
@@ -117,6 +127,14 @@ class IndeedScraper(BaseScraper):
                 if not (title and apply_link):
                     continue
 
+                if not is_acceptable_location(location):
+                    self._log.debug(
+                        "indeed.filtered_location",
+                        title=title, company=company,
+                        reason=explain_location(location),
+                    )
+                    continue
+
                 description = await self._fetch_description(apply_link)
 
                 jobs.append(
@@ -135,12 +153,12 @@ class IndeedScraper(BaseScraper):
             except Exception:
                 self._log.exception("card.parse_failed")
 
-        await page.close()
         return jobs
 
     async def _fetch_description(self, url: str) -> str:
         if not url:
             return ""
+        detail_page = None
         try:
             detail_page = await self._get_page(url)
             html = await detail_page.content()
@@ -149,9 +167,13 @@ class IndeedScraper(BaseScraper):
                 "div#jobDescriptionText, div[class*='jobsearch-jobDescriptionText'], "
                 "div[class*='job-desc']"
             )
-            description = jd_el.get_text(separator="\n", strip=True) if jd_el else ""
-            await detail_page.close()
-            return description
+            return jd_el.get_text(separator="\n", strip=True) if jd_el else ""
         except Exception:
             self._log.debug("description.fetch_failed", url=url)
             return ""
+        finally:
+            if detail_page is not None:
+                try:
+                    await detail_page.close()
+                except Exception:
+                    pass

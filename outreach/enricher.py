@@ -10,6 +10,7 @@ from outreach.apollo_client import ApolloClient
 from outreach.db import OutreachDB
 from outreach.models import OutreachContact
 from outreach.prospeo_client import ProspeoClient
+from services.scoring import _company_slug
 
 log = structlog.get_logger(__name__)
 
@@ -41,7 +42,7 @@ class OutreachEnricher:
             company = job.get("company", "").strip()
             if not company:
                 continue
-            key = company.lower()
+            key = _company_slug(company)
             if key not in companies:
                 companies[key] = job
 
@@ -131,14 +132,14 @@ class OutreachEnricher:
         else:
             tier_order = TITLE_TIERS_ENTERPRISE
 
-        # Pick best contacts (up to 2 per company)
+        # Pick best contact (1 per company — one-per-company rule)
         selected: list[dict] = []
         for tier in tier_order:
             for person in classified.get(tier, []):
-                if len(selected) >= 2:
+                if len(selected) >= 1:
                     break
                 selected.append({**person, "_role_type": tier})
-            if len(selected) >= 2:
+            if len(selected) >= 1:
                 break
 
         if not selected:

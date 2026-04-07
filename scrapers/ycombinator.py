@@ -9,6 +9,7 @@ from bs4 import BeautifulSoup
 
 from models.job import Job
 from scrapers.base import BaseScraper
+from services.location_filter import is_acceptable_location, explain as explain_location
 
 log = structlog.get_logger(__name__)
 
@@ -48,25 +49,31 @@ class YCombinatorScraper(BaseScraper):
         url = "https://www.ycombinator.com/jobs/role/product-manager"
         self._log.info("page.scraping", url=url)
 
-        page = await self._get_page(url)
-
-        # Wait for job cards to render (they're SSR'd but may lazy-load)
+        page = None
         try:
-            await page.wait_for_selector(
-                'a[href*="/companies/"][href*="/jobs/"]',
-                timeout=15_000,
-            )
-        except Exception:
-            self._log.debug("wait.timeout")
+            page = await self._get_page(url)
 
-        await asyncio.sleep(2)
+            # Wait for job cards to render (they're SSR'd but may lazy-load)
+            try:
+                await page.wait_for_selector(
+                    'a[href*="/companies/"][href*="/jobs/"]',
+                    timeout=15_000,
+                )
+            except Exception:
+                self._log.debug("wait.timeout")
 
-        html = await page.content()
-        jobs = self._parse_page(html)
-        self._log.info("page.collected", url=url, jobs=len(jobs))
+            await asyncio.sleep(2)
 
-        await page.close()
-        return jobs
+            html = await page.content()
+            jobs = self._parse_page(html)
+            self._log.info("page.collected", url=url, jobs=len(jobs))
+            return jobs
+        finally:
+            if page is not None:
+                try:
+                    await page.close()
+                except Exception:
+                    pass
 
     def _parse_page(self, html: str) -> list[Job]:
         soup = BeautifulSoup(html, "html.parser")
@@ -133,13 +140,17 @@ class YCombinatorScraper(BaseScraper):
                     # Text typically: "Full-time•Engineering•$100K - $200K•Remote"
                     # or "Full-time•Engineering•₹XM INR•IN / Remote"
                     parts = [p.strip() for p in card_text.split("•")]
+                    location_markers = (
+                        "Remote", "India", "Delhi", "Gurugram", "Gurgaon", "Noida",
+                        "Mumbai", "Bangalore", "Bengaluru", "Hyderabad", "Chennai", "Pune",
+                        "CA,", "NY,", "WA,", "TX,", "MA,", "US", "UK", "EU",
+                        "London", "Berlin", "Paris", "Tel Aviv", "Toronto", "Singapore",
+                        "San Francisco", "New York",
+                    )
                     for part in parts:
-                        if any(loc in part for loc in [
-                            "Remote", "India", " IN", "Mumbai", "Bangalore",
-                            "Delhi", "Hyderabad", "CA,", "NY,", "US"
-                        ]):
-                            location = part
-                        if any(curr in part for curr in ["$", "£", "€", "₹", "CAD", "AUD", "LPA"]):
+                        if not location and any(loc in part for loc in location_markers):
+                            location = part  # capture FIRST match, not last
+                        if not salary and any(curr in part for curr in ["$", "£", "€", "₹", "CAD", "AUD", "LPA"]):
                             salary = part
 
                     # Date: look for "N days ago" / "N hours ago"
@@ -148,6 +159,12 @@ class YCombinatorScraper(BaseScraper):
                         posted_date = _parse_relative_date(date_m.group(1))
 
                 if title and apply_link:
+                    # Reject jobs outside Delhi NCR / global remote
+                    if not is_acceptable_location(location):
+                        self._log.debug("yc.filtered_location",
+                                        title=title, company=company,
+                                        reason=explain_location(location))
+                        continue
                     jobs.append(
                         Job(
                             platform="ycombinator",

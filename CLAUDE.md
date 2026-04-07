@@ -1,5 +1,15 @@
 # CLAUDE.md — Job Search Aggregator
 
+> **⚠ REQUIRED READING BEFORE WRITING CODE ⚠**
+>
+> These three files in `docs/` are mandatory reading before touching scrapers, scoring, outreach, or API code. They encode every production bug that has shipped from this repo and the protocol to prevent recurrence.
+>
+> - **[`docs/known_edge_cases.md`](docs/known_edge_cases.md)** — catalogue of data shapes, API quirks, and runtime scenarios that have broken naive implementations (location parsing, field-mapping bugs, resource leaks, dedup hash collisions, status vocabulary drift, ...). Every item is backed by a real bug with file + line references.
+> - **[`docs/guidelines_and_learnings.md`](docs/guidelines_and_learnings.md)** — codified principles derived from the bugs above. Covers single-source-of-truth patterns, defense-in-depth filters, `try/finally` + sentinel resource management, `COALESCE` for partial SQL updates, token-bucket rate limiters, documentation–code drift detection.
+> - **[`docs/protocol_to_identify_issues.md`](docs/protocol_to_identify_issues.md)** — repeatable seven-phase audit protocol for finding classes of bugs (parallel grep hunt → verify sub-agents personally → run filter against existing data → three-layer verification: compile + behavioural + E2E).
+>
+> **Rule:** When a new non-trivial bug is found, add the edge case to `known_edge_cases.md` and — if it's the Nth instance of a pattern — promote the rule into `guidelines_and_learnings.md`.
+
 ## Project Overview
 
 A Python CLI tool that aggregates Senior Product Manager roles from 14 job platforms, scans VC portfolio job boards, US MNC career pages, tracks recently funded Indian startups, and runs automated outreach campaigns. Designed for a PM job seeker targeting Delhi NCR, 5-7 years experience, 40+ LPA, Tech/SaaS/B2B.
@@ -84,6 +94,10 @@ job_search/
 │   └── outreach_writer.py         # 4 deterministic outreach templates (recruiter/HM/funded/warm-intro)
 ├── data/
 │   └── candidate_profile.json     # Candidate proof points, strengths, target comp — fill in before using outreach writer
+├── docs/                          # MANDATORY READING — see top of this file
+│   ├── known_edge_cases.md        # Data shapes / API quirks that broke naive code (18 entries, all with file+line refs)
+│   ├── guidelines_and_learnings.md  # Codified principles derived from real bugs (18 rules)
+│   └── protocol_to_identify_issues.md  # 7-phase audit protocol + common recipes
 ├── output/                        # Runtime: jobs.db, outreach.db, CSV/Excel exports (gitignored)
 ├── .env.example                   # Template for SMTP, Apollo, Gmail, schedule, logging config
 ├── requirements.txt               # Python dependencies

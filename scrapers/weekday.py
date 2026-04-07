@@ -12,6 +12,7 @@ from playwright.async_api import Response
 
 from models.job import Job
 from scrapers.base import BaseScraper
+from services.location_filter import is_acceptable_location
 
 log = structlog.get_logger(__name__)
 
@@ -49,35 +50,42 @@ class WeekdayScraper(BaseScraper):
     requires_login: bool = True
 
     async def scrape(self) -> list[Job]:
-        url = "https://www.weekday.works/jobs/in/product-manager/ncr"
+        keyword_slug = self.search_params.title_keywords[0].replace(" ", "-")
+        url = f"https://www.weekday.works/jobs/in/{keyword_slug}/ncr"
         self._log.info("page.scraping", url=url)
 
-        page = await self._get_page(url)
-
-        # Check if redirected to login
-        if "login" in page.url.lower() or "signin" in page.url.lower():
-            self._log.warning("session.expired", redirect_url=page.url)
-            await page.close()
-            return []
-
-        # Wait for Next.js hydration to complete
+        page = None
         try:
-            await page.wait_for_selector("#__NEXT_DATA__", timeout=12_000)
-        except Exception:
-            self._log.debug("wait.next_data.timeout")
+            page = await self._get_page(url)
 
-        await asyncio.sleep(2)
+            # Check if redirected to login
+            if "login" in page.url.lower() or "signin" in page.url.lower():
+                self._log.warning("session.expired", redirect_url=page.url)
+                return []
 
-        # Extract job data from __NEXT_DATA__
-        jobs = await self._parse_next_data(page)
+            # Wait for Next.js hydration to complete
+            try:
+                await page.wait_for_selector("#__NEXT_DATA__", timeout=12_000)
+            except Exception:
+                self._log.debug("wait.next_data.timeout")
 
-        if not jobs:
-            # Fallback: DOM-based parsing
-            html = await page.content()
-            jobs = self._parse_html(html)
+            await asyncio.sleep(2)
 
-        await page.close()
-        return jobs
+            # Extract job data from __NEXT_DATA__
+            jobs = await self._parse_next_data(page)
+
+            if not jobs:
+                # Fallback: DOM-based parsing
+                html = await page.content()
+                jobs = self._parse_html(html)
+
+            return jobs
+        finally:
+            if page is not None:
+                try:
+                    await page.close()
+                except Exception:
+                    pass
 
     async def _parse_next_data(self, page: Any) -> list[Job]:
         """Extract jobs from Next.js __NEXT_DATA__ JSON in the page."""
@@ -147,12 +155,16 @@ class WeekdayScraper(BaseScraper):
                 posted_date = _parse_date(item.get("addedOn", ""))
 
                 if title and company and apply_link:
+                    loc = location.strip()
+                    if not is_acceptable_location(loc):
+                        self._log.debug("api.location_rejected", title=title, location=loc)
+                        continue
                     jobs.append(
                         Job(
                             platform="weekday",
                             title=title.strip(),
                             company=company.strip(),
-                            location=location.strip(),
+                            location=loc,
                             salary=salary,
                             posted_date=posted_date,
                             skills=skills,
@@ -203,6 +215,9 @@ class WeekdayScraper(BaseScraper):
                     location = parts[1]
 
             if title:
+                if not is_acceptable_location(location):
+                    self._log.debug("html.location_rejected", title=title, location=location)
+                    continue
                 jobs.append(
                     Job(
                         platform="weekday",

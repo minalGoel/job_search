@@ -56,7 +56,9 @@ class RemoteOKScraper(BaseScraper):
                 else:
                     skills = []
 
-                apply_url = item.get("url", "")
+                # Prefer the employer's direct apply URL; fall back to the RemoteOK
+                # listing page only if apply_url is absent.
+                apply_url = item.get("apply_url", "") or item.get("url", "")
                 if apply_url and not apply_url.startswith("http"):
                     apply_url = f"https://remoteok.com{apply_url}"
 
@@ -74,12 +76,20 @@ class RemoteOKScraper(BaseScraper):
                         pass
 
                 if position and company:
+                    final_location = location.strip() if location else "Remote"
+                    # Reject region-restricted remotes that don't include India
+                    from services.location_filter import is_acceptable_location, explain as explain_location
+                    if not is_acceptable_location(final_location):
+                        self._log.debug("remoteok.filtered_location",
+                                        title=position, company=company,
+                                        reason=explain_location(final_location))
+                        continue
                     jobs.append(
                         Job(
                             platform="remoteok",
                             title=position.strip(),
                             company=company.strip(),
-                            location=location.strip() if location else "Remote",
+                            location=final_location,
                             salary=salary,
                             posted_date=posted_date,
                             skills=skills,

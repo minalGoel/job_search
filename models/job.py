@@ -14,12 +14,17 @@ def _normalize(text: str) -> str:
 
 
 def _strip_company_suffixes(name: str) -> str:
-    """Remove common legal suffixes for dedup matching."""
-    suffixes = [
+    """Remove common legal suffixes for dedup matching.
+
+    Keep in sync with _LEGAL_SUFFIXES in services/scoring.py.
+    """
+    suffixes = frozenset({
         "pvt", "ltd", "limited", "private", "inc", "incorporated",
         "corp", "corporation", "llc", "technologies", "technology",
         "software", "solutions", "india", "services", "labs",
-    ]
+        "company", "co", "group", "global", "intl", "international",
+        "pte", "plc", "gmbh", "sa", "ag", "bv",
+    })
     words = _normalize(name).split()
     return " ".join(w for w in words if w not in suffixes)
 
@@ -63,8 +68,15 @@ class Job(BaseModel):
 
     @property
     def dedup_hash(self) -> str:
-        """Cross-platform dedup key: normalized company + title."""
+        """Cross-platform dedup key: normalized company + title + region.
+
+        Region is included so that a London "Product Manager" and a Delhi
+        "Product Manager" at the same company do NOT collide.
+        """
+        # Local import to avoid cycles at module load
+        from services.location_filter import normalize_region
         company = _strip_company_suffixes(self.company)
         title = _strip_title_decorators(self.title)
-        raw = f"{company}|{title}|delhi"
+        region = normalize_region(self.location)
+        raw = f"{company}|{title}|{region}"
         return hashlib.sha256(raw.encode()).hexdigest()[:16]

@@ -17,145 +17,168 @@ async def run_enrich(settings: Settings) -> None:
     """Step 1: Find new companies from jobs + funding, enrich contacts, generate drafts."""
     from storage.db import JobDB
 
-    db = OutreachDB()
-    job_db = JobDB()
+    db: OutreachDB | None = None
+    job_db = None
+    try:
+        db = OutreachDB()
+        job_db = JobDB()
 
-    enricher = OutreachEnricher(settings, db)
+        enricher = OutreachEnricher(settings, db)
 
-    # Source 1: New job listings (all PM roles, one per company)
-    all_jobs = job_db.get_all_jobs()
-    job_count = await enricher.enrich_from_jobs(all_jobs)
-    log.info("pipeline.jobs_enriched", contacts=job_count)
+        # Source 1: New job listings (all PM roles, one per company)
+        all_jobs = job_db.get_all_jobs()
+        job_count = await enricher.enrich_from_jobs(all_jobs)
+        log.info("pipeline.jobs_enriched", contacts=job_count)
 
-    # Source 2: Funded companies
-    # Read from funding export if available
-    funded_companies = _load_funded_companies()
-    if funded_companies:
-        fund_count = await enricher.enrich_from_funding(funded_companies)
-        log.info("pipeline.funding_enriched", contacts=fund_count)
+        # Source 2: Funded companies
+        # Read from funding export if available
+        funded_companies = _load_funded_companies()
+        fund_count = 0
+        if funded_companies:
+            fund_count = await enricher.enrich_from_funding(funded_companies)
+            log.info("pipeline.funding_enriched", contacts=fund_count)
 
-    # Generate email drafts for all enriched contacts with verified emails
-    enriched = db.get_contacts_by_status("enriched")
-    draft_count = 0
-    for contact in enriched:
-        if not contact.get("contact_email"):
-            continue
-        emails = generate_sequence(contact, settings)
-        inserted = 0
-        for i, email in enumerate(emails):
-            # Schedule follow-ups relative to now
-            if i == 0:
-                email.scheduled_send_at = datetime.now()
-            elif i == 1:
-                email.scheduled_send_at = datetime.now() + timedelta(days=3)
-            elif i == 2:
-                email.scheduled_send_at = datetime.now() + timedelta(days=7)
+        # Generate email drafts for all enriched contacts with verified emails
+        enriched = db.get_contacts_by_status("enriched")
+        draft_count = 0
+        for contact in enriched:
+            if not contact.get("contact_email"):
+                continue
+            emails = generate_sequence(contact, settings)
+            inserted = 0
+            for i, email in enumerate(emails):
+                # Schedule follow-ups relative to now
+                if i == 0:
+                    email.scheduled_send_at = datetime.now()
+                elif i == 1:
+                    email.scheduled_send_at = datetime.now() + timedelta(days=3)
+                elif i == 2:
+                    email.scheduled_send_at = datetime.now() + timedelta(days=7)
 
-            if db.insert_email(email):
-                draft_count += 1
-                inserted += 1
+                if db.insert_email(email):
+                    draft_count += 1
+                    inserted += 1
 
-        if inserted:
-            db.update_contact_status(contact["id"], "queued")
+            if inserted:
+                db.update_contact_status(contact["id"], "queued")
 
-    log.info("pipeline.drafts_generated", count=draft_count)
-    print(f"\n  Enriched contacts: {job_count + (fund_count if funded_companies else 0)}")
-    print(f"  Email drafts generated: {draft_count}")
-    print(f"  Run 'python main.py outreach-review' to review and approve.")
-
-    job_db.close()
-    db.close()
+        log.info("pipeline.drafts_generated", count=draft_count)
+        print(f"\n  Enriched contacts: {job_count + fund_count}")
+        print(f"  Email drafts generated: {draft_count}")
+        print(f"  Run 'python main.py outreach-review' to review and approve.")
+    except Exception:
+        log.exception("pipeline.enrich_failed")
+        raise
+    finally:
+        if job_db is not None:
+            job_db.close()
+        if db is not None:
+            db.close()
 
 
 def run_send(settings: Settings) -> int:
     """Step 3: Send all approved emails via Gmail API, respecting daily limit."""
-    db = OutreachDB()
-    sender = GmailSender(settings)
+    db: OutreachDB | None = None
+    try:
+        db = OutreachDB()
+        sender = GmailSender(settings)
 
-    today_count = db.get_today_send_count()
-    remaining = settings.OUTREACH_DAILY_LIMIT - today_count
+        today_count = db.get_today_send_count()
+        remaining = settings.OUTREACH_DAILY_LIMIT - today_count
 
-    if remaining <= 0:
-        print(f"  Daily limit reached ({settings.OUTREACH_DAILY_LIMIT} emails). Try again tomorrow.")
-        db.close()
-        return 0
+        if remaining <= 0:
+            print(f"  Daily limit reached ({settings.OUTREACH_DAILY_LIMIT} emails). Try again tomorrow.")
+            return 0
 
-    approved = db.get_sendable_emails()
-    if not approved:
-        print("  No approved emails ready to send (check scheduled times).")
-        db.close()
-        return 0
+        approved = db.get_sendable_emails()
+        if not approved:
+            print("  No approved emails ready to send (check scheduled times).")
+            return 0
 
-    to_send = approved[:remaining]
-    print(f"  Sending {len(to_send)} of {len(approved)} ready emails (daily limit: {remaining} remaining)...\n")
+        to_send = approved[:remaining]
+        print(f"  Sending {len(to_send)} of {len(approved)} ready emails (daily limit: {remaining} remaining)...\n")
 
-    sent_count = 0
-    for email_data in to_send:
-        email_id = email_data["id"]
-        contact_id = email_data["contact_id"]
-        to_addr = email_data.get("contact_email", "")
+        sent_count = 0
+        for email_data in to_send:
+            email_id = email_data["id"]
+            contact_id = email_data["contact_id"]
+            to_addr = email_data.get("contact_email", "")
 
-        if not to_addr:
-            log.warning("pipeline.no_email", email_id=email_id)
-            db.update_email_status(email_id, "skipped")
-            continue
+            if not to_addr:
+                log.warning("pipeline.no_email", email_id=email_id)
+                db.update_email_status(email_id, "skipped")
+                continue
 
-        # Get thread ID for follow-ups
-        thread_id = ""
-        if email_data.get("sequence_step", 1) > 1:
-            thread_id = db.get_thread_id_for_contact(contact_id)
+            # Get thread ID for follow-ups
+            thread_id = ""
+            if email_data.get("sequence_step", 1) > 1:
+                thread_id = db.get_thread_id_for_contact(contact_id)
+                if not thread_id:
+                    # No thread to reply to — skip rather than start a new conversation
+                    log.warning("pipeline.no_thread_id", email_id=email_id, contact_id=contact_id)
+                    db.update_email_status(email_id, "skipped")
+                    continue
 
-        try:
-            result = sender.send_email(
-                to=to_addr,
-                subject=email_data.get("subject", ""),
-                body_html=email_data.get("body_html", ""),
-                body_plain=email_data.get("body_plain", ""),
-                thread_id=thread_id,
-            )
-            db.mark_email_sent(
-                email_id,
-                result.get("message_id", ""),
-                result.get("thread_id", ""),
-            )
-            db.update_contact_status(contact_id, "sent")
-            sent_count += 1
-            print(f"    Sent to {to_addr} ({email_data.get('company', '')})")
-        except Exception as e:
-            error_str = str(e).lower()
-            # Permanent failures: invalid address, rejected by server
-            is_permanent = any(kw in error_str for kw in [
-                "invalid", "not found", "does not exist", "rejected",
-                "550", "551", "552", "553", "554",
-            ])
-            if is_permanent:
-                log.error("pipeline.send_bounced", email_id=email_id, error=str(e))
-                db.update_email_status(email_id, "bounced")
-            else:
-                # Transient: auth, network, quota — revert to approved for retry
-                log.warning("pipeline.send_transient", email_id=email_id, error=str(e))
-                db.update_email_status(email_id, "approved")
+            try:
+                result = sender.send_email(
+                    to=to_addr,
+                    subject=email_data.get("subject", ""),
+                    body_html=email_data.get("body_html", ""),
+                    body_plain=email_data.get("body_plain", ""),
+                    thread_id=thread_id,
+                )
+                db.mark_email_sent(
+                    email_id,
+                    result.get("message_id", ""),
+                    result.get("thread_id", ""),
+                )
+                db.update_contact_status(contact_id, "sent")
+                sent_count += 1
+                print(f"    Sent to {to_addr} ({email_data.get('company', '')})")
+            except Exception as e:
+                error_str = str(e).lower()
+                # Permanent failures: invalid address, rejected by server
+                is_permanent = any(kw in error_str for kw in [
+                    "invalid", "not found", "does not exist", "rejected",
+                    "550", "551", "552", "553", "554",
+                ])
+                if is_permanent:
+                    log.error("pipeline.send_bounced", email_id=email_id, error=str(e))
+                    db.update_email_status(email_id, "bounced")
+                    db.update_contact_status(contact_id, "bounced")
+                else:
+                    # Transient: auth, network, quota — revert to approved for retry
+                    log.warning("pipeline.send_transient", email_id=email_id, error=str(e))
+                    db.update_email_status(email_id, "approved")
 
-    print(f"\n  Sent: {sent_count} emails. Today total: {today_count + sent_count}/{settings.OUTREACH_DAILY_LIMIT}")
-    db.close()
-    return sent_count
+        print(f"\n  Sent: {sent_count} emails. Today total: {today_count + sent_count}/{settings.OUTREACH_DAILY_LIMIT}")
+        return sent_count
+    except Exception:
+        log.exception("pipeline.send_failed")
+        raise
+    finally:
+        if db is not None:
+            db.close()
 
 
 def mark_replied(contact_id: str) -> None:
     """Mark a contact as replied and cancel pending follow-ups."""
-    db = OutreachDB()
-    contact = db.get_contact(contact_id)
-    if not contact:
-        print(f"  Contact {contact_id} not found.")
-        db.close()
-        return
+    db: OutreachDB | None = None
+    try:
+        db = OutreachDB()
+        contact = db.get_contact(contact_id)
+        if not contact:
+            print(f"  Contact {contact_id} not found.")
+            return
 
-    db.update_contact_status(contact_id, "replied")
-    cancelled = db.cancel_pending_followups(contact_id)
-    print(f"  Marked {contact.get('contact_name', '')} at {contact.get('company', '')} as REPLIED.")
-    if cancelled:
-        print(f"  Cancelled {cancelled} pending follow-up(s).")
-    db.close()
+        db.update_contact_status(contact_id, "replied")
+        cancelled = db.cancel_pending_followups(contact_id)
+        print(f"  Marked {contact.get('contact_name', '')} at {contact.get('company', '')} as REPLIED.")
+        if cancelled:
+            print(f"  Cancelled {cancelled} pending follow-up(s).")
+    finally:
+        if db is not None:
+            db.close()
 
 
 def show_status(settings: Settings) -> None:

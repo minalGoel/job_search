@@ -10,6 +10,7 @@ import structlog
 
 from models.job import Job
 from scrapers.base import BaseScraper
+from services.location_filter import is_acceptable_location, explain as explain_location
 
 log = structlog.get_logger(__name__)
 
@@ -17,10 +18,6 @@ log = structlog.get_logger(__name__)
 CATEGORY_ID = 12
 PAGE_SIZE = 20
 MAX_PAGES = 3  # 3 × 20 = 60 jobs max, filtered to Delhi NCR
-
-# Delhi NCR location IDs on Hirist (determined by inspection)
-# 38 = Noida, 8 = Gurgaon/Gurugram, 1 = Delhi
-DELHI_NCR_KEYWORDS = {"delhi", "ncr", "noida", "gurgaon", "gurugram", "faridabad", "ghaziabad"}
 
 _BASE_URL = "https://gladiator.hirist.tech/job/category/"
 _HEADERS = {
@@ -98,9 +95,13 @@ class HiristScraper(BaseScraper):
                 ]
                 location = ", ".join(ln for ln in location_names if ln)
 
-                # Filter to Delhi NCR only
-                loc_lower = location.lower()
-                if not any(kw in loc_lower for kw in DELHI_NCR_KEYWORDS):
+                # Filter to Delhi NCR / global remote using canonical location filter
+                if not is_acceptable_location(location):
+                    self._log.debug(
+                        "hirist.filtered_location",
+                        title=title, company=company,
+                        reason=explain_location(location),
+                    )
                     continue
 
                 # Salary

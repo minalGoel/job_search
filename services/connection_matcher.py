@@ -21,6 +21,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from config.scoring_rules import IIT_TOP7_KEYWORDS
+from services.scoring import _company_slug
 
 if TYPE_CHECKING:
     from storage.db import JobDB
@@ -32,17 +33,6 @@ if TYPE_CHECKING:
 
 def _normalize(text: str) -> str:
     return re.sub(r"\s+", " ", text.strip().lower())
-
-
-def _company_slug(name: str) -> str:
-    s = re.sub(r"[^a-z0-9 ]", "", _normalize(name))
-    suffixes = {
-        "pvt", "ltd", "limited", "private", "inc", "incorporated",
-        "corp", "corporation", "llc", "technologies", "technology",
-        "software", "solutions", "india", "services", "labs",
-    }
-    words = [w for w in s.split() if w not in suffixes]
-    return " ".join(words).strip()
 
 
 def _contact_id(full_name: str, company: str, linkedin_url: str) -> str:

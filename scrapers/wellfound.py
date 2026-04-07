@@ -9,6 +9,7 @@ from bs4 import BeautifulSoup
 
 from models.job import Job
 from scrapers.base import BaseScraper
+from services.location_filter import is_acceptable_location, explain as explain_location
 
 log = structlog.get_logger(__name__)
 
@@ -41,8 +42,9 @@ class WellfoundScraper(BaseScraper):
     requires_login: bool = True  # blank page in headless; requires logged-in session
 
     def _build_search_url(self, page_num: int = 1) -> str:
+        role_slug = self.search_params.title_keywords[0].replace(" ", "-")
         base = "https://wellfound.com/jobs"
-        params = f"?role=product-manager&location=delhi"
+        params = f"?role={role_slug}&location=delhi"
         if page_num > 1:
             params += f"&page={page_num}"
         return f"{base}{params}"
@@ -66,25 +68,32 @@ class WellfoundScraper(BaseScraper):
         return all_jobs
 
     async def _scrape_page(self, url: str) -> list[Job]:
-        page = await self._get_page(url)
-
-        # Wait for React to render job cards
+        page = None
         try:
-            await page.wait_for_selector(
-                "div[class*='job'], div[class*='styles_result'], "
-                "a[class*='job-listing']",
-                timeout=12_000,
-            )
-        except Exception:
-            self._log.debug("wait.timeout")
+            page = await self._get_page(url)
 
-        await asyncio.sleep(2)
-        html = await page.content()
+            # Wait for React to render job cards
+            try:
+                await page.wait_for_selector(
+                    "div[class*='job'], div[class*='styles_result'], "
+                    "a[class*='job-listing']",
+                    timeout=12_000,
+                )
+            except Exception:
+                self._log.debug("wait.timeout")
+
+            await asyncio.sleep(2)
+            html = await page.content()
+        finally:
+            if page is not None:
+                try:
+                    await page.close()
+                except Exception:
+                    pass
 
         # Detect Cloudflare bot challenge (wellfound uses captcha-delivery.com)
         if "captcha-delivery.com" in html or "challenge-platform" in html:
             self._log.warning("cloudflare.challenge_detected", url=url)
-            await page.close()
             return []
 
         soup = BeautifulSoup(html, "html.parser")
@@ -139,6 +148,14 @@ class WellfoundScraper(BaseScraper):
                 if not (title and apply_link):
                     continue
 
+                if not is_acceptable_location(location):
+                    self._log.debug(
+                        "wellfound.filtered_location",
+                        title=title, company=company,
+                        reason=explain_location(location),
+                    )
+                    continue
+
                 # Fetch full description
                 description = await self._fetch_description(apply_link)
 
@@ -157,12 +174,12 @@ class WellfoundScraper(BaseScraper):
             except Exception:
                 self._log.exception("card.parse_failed")
 
-        await page.close()
         return jobs
 
     async def _fetch_description(self, url: str) -> str:
         if not url:
             return ""
+        page = None
         try:
             page = await self._get_page(url)
             await page.wait_for_selector(
@@ -175,9 +192,13 @@ class WellfoundScraper(BaseScraper):
                 "div[class*='description'], div[class*='job-description'], "
                 "div[class*='content'] p"
             )
-            description = jd_el.get_text(separator="\n", strip=True) if jd_el else ""
-            await page.close()
-            return description
+            return jd_el.get_text(separator="\n", strip=True) if jd_el else ""
         except Exception:
             self._log.debug("description.fetch_failed", url=url)
             return ""
+        finally:
+            if page is not None:
+                try:
+                    await page.close()
+                except Exception:
+                    pass

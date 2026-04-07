@@ -13,6 +13,7 @@ from playwright.async_api import Page, Response
 
 from models.job import Job
 from scrapers.base import BaseScraper
+from services.location_filter import is_acceptable_location
 
 log = structlog.get_logger(__name__)
 
@@ -100,29 +101,40 @@ class NaukriScraper(BaseScraper):
 
         # Register listener BEFORE navigation so we catch the first load
         context = await self.bm.get_context(self.name, Path("cookies"))
-        page = await context.new_page()
-        page.on("response", _intercept)
-        await asyncio.sleep(random.uniform(2.0, 4.0))
+        page = None  # sentinel — ensures finally block is safe even if new_page() raises
         try:
-            await page.goto(url, wait_until="domcontentloaded", timeout=20_000)
-        except Exception:
-            self._log.debug("page.goto_timeout", page=page_num)
-        await asyncio.sleep(4)
+            page = await context.new_page()
+            page.on("response", _intercept)
+            await asyncio.sleep(random.uniform(2.0, 4.0))
+            try:
+                await page.goto(url, wait_until="domcontentloaded", timeout=20_000)
+            except Exception:
+                # goto failed — page is likely blank; log as warning (not debug) so
+                # failures are visible in run logs, then return empty rather than
+                # continuing on a broken page.
+                self._log.warning("page.goto_timeout", page=page_num, url=url)
+                return []
+            await asyncio.sleep(4)
 
-        # --- Strategy 1: Parse captured JSON API responses ---
-        if captured_responses:
-            self._log.info("api.captured", count=len(captured_responses))
-            jobs = self._parse_api_response(captured_responses)
-            if jobs:
-                await page.close()
-                return jobs
+            # --- Strategy 1: Parse captured JSON API responses ---
+            if captured_responses:
+                self._log.info("api.captured", count=len(captured_responses))
+                jobs = self._parse_api_response(captured_responses)
+                if jobs:
+                    return jobs
 
-        # --- Strategy 2: Fall back to HTML ---
-        self._log.info("fallback.html", page=page_num)
-        html = await page.content()
-        jobs = await self._parse_html(html, page)
-        await page.close()
-        return jobs
+            # --- Strategy 2: Fall back to HTML ---
+            self._log.info("fallback.html", page=page_num)
+            html = await page.content()
+            jobs = await self._parse_html(html, page)
+            return jobs
+
+        finally:
+            if page is not None:
+                try:
+                    await page.close()
+                except Exception:
+                    pass
 
     def _parse_api_response(
         self, responses: list[dict[str, Any]]
@@ -136,8 +148,23 @@ class NaukriScraper(BaseScraper):
                 try:
                     title = item.get("title", "")
                     company = item.get("companyName", "")
-                    location = item.get("placeholders", [{}])[0].get("label", "")
-                    salary = item.get("placeholders", [{}])[1].get("label", "") if len(item.get("placeholders", [])) > 1 else None
+
+                    # Naukri's `placeholders` is a list of {type, label} dicts
+                    # where type can be "experience", "salary", "location". Earlier
+                    # code indexed [0] for location which is actually experience.
+                    placeholders = item.get("placeholders", []) or []
+                    by_type: dict[str, str] = {}
+                    for ph in placeholders:
+                        if not isinstance(ph, dict):
+                            continue
+                        ptype = (ph.get("type") or "").lower()
+                        plabel = (ph.get("label") or "").strip()
+                        if ptype and plabel:
+                            by_type[ptype] = plabel
+
+                    location = by_type.get("location", "")
+                    salary = by_type.get("salary") or None
+                    # experience intentionally discarded; by_type.get("experience")
                     raw_skills = item.get("tagsAndSkills")
                     if isinstance(raw_skills, str):
                         skills_list = [part.strip() for part in raw_skills.split(",") if part.strip()]
@@ -157,12 +184,16 @@ class NaukriScraper(BaseScraper):
                     description = item.get("jobDescription", "")
 
                     if title and company and apply_link:
+                        loc = location.strip()
+                        if not is_acceptable_location(loc):
+                            self._log.debug("api.location_rejected", title=title, location=loc)
+                            continue
                         jobs.append(
                             Job(
                                 platform="naukri",
                                 title=title.strip(),
                                 company=company.strip(),
-                                location=location.strip(),
+                                location=loc,
                                 salary=salary.strip() if salary else None,
                                 posted_date=posted_date,
                                 skills=[s.strip() for s in skills_list if s.strip()],
@@ -214,6 +245,10 @@ class NaukriScraper(BaseScraper):
                 if not (title and company and apply_link):
                     continue
 
+                if not is_acceptable_location(location):
+                    self._log.debug("html.location_rejected", title=title, location=location)
+                    continue
+
                 # Fetch full description from individual job page
                 description = await self._fetch_description(apply_link)
 
@@ -238,6 +273,7 @@ class NaukriScraper(BaseScraper):
         """Navigate to a job detail page and extract the description."""
         if not url:
             return ""
+        detail_page = None
         try:
             detail_page = await self._get_page(url)
             html = await detail_page.content()
@@ -246,9 +282,13 @@ class NaukriScraper(BaseScraper):
                 "div[class*='job-desc'], div[class*='jd-desc'], "
                 "section[class*='job-desc'], div.dang-inner-html"
             )
-            description = jd_el.get_text(separator="\n", strip=True) if jd_el else ""
-            await detail_page.close()
-            return description
+            return jd_el.get_text(separator="\n", strip=True) if jd_el else ""
         except Exception:
             self._log.debug("description.fetch_failed", url=url)
             return ""
+        finally:
+            if detail_page is not None:
+                try:
+                    await detail_page.close()
+                except Exception:
+                    pass

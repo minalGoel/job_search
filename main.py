@@ -44,6 +44,7 @@ async def _run_all(platforms: list[str] | None = None) -> None:
     from services.dedup import mark_cross_platform_duplicates
     from services.exporter import export_csv, export_excel
     from services.notifier import send_new_jobs_alert
+    from services.location_filter import is_acceptable_location, explain as explain_location
 
     run_start = datetime.now()
     db = JobDB()
@@ -65,22 +66,43 @@ async def _run_all(platforms: list[str] | None = None) -> None:
 
             for name, task in tasks.items():
                 try:
-                    jobs = await task
+                    jobs, scrape_error = await task
+                    if scrape_error:
+                        errors[name] = scrape_error
+                        typer.echo(f"  {name}: ERROR — {scrape_error}", err=True)
+                        # Still process any jobs that came back before the failure
                     if jobs:
                         inserted_jobs: list[Job] = []
                         skipped = 0
+                        location_rejected = 0
                         for job in jobs:
+                            # Pipeline-level location gate: defense in depth.
+                            # Individual scrapers already filter, but this catches
+                            # anything that slipped through (e.g. Naukri returning
+                            # a Mumbai job in a Delhi search, LinkedIn cross-border).
+                            if not is_acceptable_location(job.location):
+                                location_rejected += 1
+                                log.debug("pipeline.location_rejected",
+                                          platform=name,
+                                          title=job.title,
+                                          company=job.company,
+                                          location=job.location,
+                                          reason=explain_location(job.location))
+                                continue
                             if db.insert_job(job):
                                 inserted_jobs.append(job)
                             else:
                                 skipped += 1
 
                         all_new_jobs.extend(inserted_jobs)
-                        typer.echo(f"  {name}: {len(inserted_jobs)} new, {skipped} existing")
-                    else:
+                        loc_note = f", {location_rejected} wrong-location" if location_rejected else ""
+                        typer.echo(f"  {name}: {len(inserted_jobs)} new, {skipped} existing{loc_note}")
+                    elif not scrape_error:
                         typer.echo(f"  {name}: 0 results")
                 except Exception as e:
-                    errors[name] = str(e)
+                    # Safety net: _safe_scrape should catch everything, but
+                    # fall through here if the task wrapper itself crashes.
+                    errors[name] = f"{type(e).__name__}: {e}"
                     typer.echo(f"  {name}: ERROR — {e}", err=True)
 
         # Dedup across platforms
@@ -233,6 +255,7 @@ async def _run_vc_jobs() -> None:
     from storage.db import JobDB
     from vc_portals.scraper import VCPortalScraper
     from services.exporter import export_csv
+    from services.location_filter import is_acceptable_location, explain as explain_location
 
     typer.echo("Scanning VC portfolio job portals...\n")
 
@@ -240,13 +263,18 @@ async def _run_vc_jobs() -> None:
         scraper = VCPortalScraper(bm)
         jobs = await scraper.scrape_all()
 
-    if jobs:
+    accepted = [j for j in jobs if is_acceptable_location(j.location)]
+    rejected = len(jobs) - len(accepted)
+    if rejected:
+        typer.echo(f"  Location filter: rejected {rejected} out-of-scope jobs.")
+
+    if accepted:
         db = JobDB()
         try:
-            inserted, skipped = db.insert_jobs(jobs)
+            inserted, skipped = db.insert_jobs(accepted)
             typer.echo(f"\nVC portals: {inserted} new, {skipped} existing")
             settings.OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
-            export_csv([j.model_dump() for j in jobs], settings.OUTPUT_DIR)
+            export_csv([j.model_dump() for j in accepted], settings.OUTPUT_DIR)
         finally:
             db.close()
     else:
@@ -264,6 +292,7 @@ async def _run_mnc_jobs() -> None:
     from browser.context import BrowserManager
     from storage.db import JobDB
     from mnc_careers.scraper import MNCCareerScraper
+    from services.location_filter import is_acceptable_location
 
     typer.echo("Scanning US MNC career pages...\n")
 
@@ -271,10 +300,15 @@ async def _run_mnc_jobs() -> None:
         scraper = MNCCareerScraper(bm)
         jobs = await scraper.scrape_all()
 
-    if jobs:
+    accepted = [j for j in jobs if is_acceptable_location(j.location)]
+    rejected = len(jobs) - len(accepted)
+    if rejected:
+        typer.echo(f"  Location filter: rejected {rejected} out-of-scope jobs.")
+
+    if accepted:
         db = JobDB()
         try:
-            inserted, skipped = db.insert_jobs(jobs)
+            inserted, skipped = db.insert_jobs(accepted)
             typer.echo(f"\nMNC careers: {inserted} new, {skipped} existing")
         finally:
             db.close()
@@ -533,9 +567,8 @@ def shortlist(
 ) -> None:
     """Mark a job as shortlisted for application."""
     _configure_logging()
-    import hashlib
     from datetime import datetime as _dt
-    from storage.db import JobDB
+    from storage.db import JobDB, application_id_for
 
     db = JobDB()
     try:
@@ -544,7 +577,7 @@ def shortlist(
             typer.echo(f"Job {job_id!r} not found.", err=True)
             raise typer.Exit(1)
 
-        app_id = hashlib.sha256(f"app|{job_id}".encode()).hexdigest()[:16]
+        app_id = application_id_for(job_id)
         now = _dt.now().isoformat()
         db.upsert_application({
             "id": app_id,
@@ -564,16 +597,18 @@ def shortlist(
 def apply_status_cmd(
     job_id: str = typer.Option(..., "--job-id", "-j", help="Job ID"),
     status: str = typer.Option(..., "--status", "-s",
-        help="Status: to_review|shortlisted|applied|reached_out|interviewing|rejected|offer|parked"),
+        help="Status: to_review|shortlisted|reached_out|applied|screening|interview|offer|rejected|parked|skipped"),
     notes: Optional[str] = typer.Option(None, "--notes", "-n"),
 ) -> None:
     """Update the application status for a job."""
     _configure_logging()
-    from storage.db import JobDB
+    from storage.db import JobDB, APPLICATION_STATUSES
 
-    valid = {"to_review", "shortlisted", "applied", "reached_out", "interviewing", "rejected", "offer", "parked"}
-    if status not in valid:
-        typer.echo(f"Invalid status '{status}'. Choose from: {', '.join(sorted(valid))}", err=True)
+    if status not in APPLICATION_STATUSES:
+        typer.echo(
+            f"Invalid status '{status}'. Choose from: {', '.join(sorted(APPLICATION_STATUSES))}",
+            err=True,
+        )
         raise typer.Exit(1)
 
     db = JobDB()
@@ -619,7 +654,7 @@ def pipeline_status() -> None:
 def today() -> None:
     """Print today's action queue: what to apply to, reach out to, follow up on."""
     _configure_logging()
-    from storage.db import JobDB
+    from storage.db import JobDB, STATUSES_COUNTING_AS_APPLIED
     from services.scoring import score_job, _company_slug
     from services.company_intel import build_company_profiles, enrich_from_funding_data
     import json
@@ -676,7 +711,7 @@ def today() -> None:
         cutoff = (_dt.now() - timedelta(days=3)).isoformat()
         due = [
             a for a in apps
-            if a.get("status") in ("applied", "reached_out")
+            if a.get("status") in STATUSES_COUNTING_AS_APPLIED
             and (a.get("last_action_at") or "") < cutoff
         ]
         if due:
@@ -829,7 +864,7 @@ async def _full_run_async(
     import time
     import json
     from datetime import datetime as _dt, timedelta
-    from storage.db import JobDB
+    from storage.db import JobDB, STATUSES_COUNTING_AS_APPLIED
     from services.scoring import score_job, _company_slug
     from services.company_intel import build_company_profiles, enrich_from_funding_data
     from services.exporter import export_csv, export_excel
@@ -938,7 +973,7 @@ async def _full_run_async(
         # Follow-ups
         apps = db.get_applications()
         cutoff = (_dt.now() - timedelta(days=3)).isoformat()
-        due = [a for a in apps if a.get("status") in ("applied", "reached_out") and (a.get("last_action_at") or "") < cutoff]
+        due = [a for a in apps if a.get("status") in STATUSES_COUNTING_AS_APPLIED and (a.get("last_action_at") or "") < cutoff]
         typer.echo(f"\n  FOLLOW-UPS OVERDUE")
         if due:
             for a in due[:3]:
@@ -980,6 +1015,61 @@ async def _full_run_async(
     typer.echo(f"  FULL RUN COMPLETE  —  total time: {_elapsed(overall_start)}")
     typer.echo(f"  Output: {settings.OUTPUT_DIR}")
     typer.echo(f"{'═' * 60}\n")
+
+
+@app.command(name="purge-jobs")
+def purge_jobs(
+    yes: bool = typer.Option(False, "--yes", "-y", help="Skip confirmation"),
+    keep_applications: bool = typer.Option(
+        True, "--keep-applications/--drop-applications",
+        help="Preserve the applications tracker (default: keep)",
+    ),
+) -> None:
+    """
+    Wipe scraped jobs from the DB so you can re-scrape cleanly.
+
+    By default this keeps your application tracker intact — only the scraped
+    jobs, runs, company profiles, and connection matches are cleared.
+    Pass --drop-applications to also wipe the tracker.
+    """
+    from storage.db import JobDB
+    _configure_logging()
+
+    db = JobDB()
+    try:
+        job_count = db.conn.execute("SELECT COUNT(*) FROM jobs").fetchone()[0]
+        run_count = db.conn.execute("SELECT COUNT(*) FROM runs").fetchone()[0]
+        app_count = db.conn.execute("SELECT COUNT(*) FROM applications").fetchone()[0]
+
+        typer.echo("\n  About to PURGE the following tables:")
+        typer.echo(f"    jobs:              {job_count:>6} rows")
+        typer.echo(f"    runs:              {run_count:>6} rows")
+        typer.echo(f"    company_profiles:  (all)")
+        typer.echo(f"    job_connection_matches: (all)")
+        if keep_applications:
+            typer.echo(f"    applications:      {app_count:>6} rows  [PRESERVED]")
+        else:
+            typer.echo(f"    applications:      {app_count:>6} rows  [WILL BE DROPPED]")
+        typer.echo()
+
+        if not yes:
+            confirm = typer.confirm("  Are you sure? This cannot be undone")
+            if not confirm:
+                typer.echo("  Aborted.")
+                return
+
+        db.conn.execute("DELETE FROM jobs")
+        db.conn.execute("DELETE FROM runs")
+        db.conn.execute("DELETE FROM company_profiles")
+        db.conn.execute("DELETE FROM job_connection_matches")
+        if not keep_applications:
+            db.conn.execute("DELETE FROM applications")
+        db.conn.commit()
+        db.conn.execute("VACUUM")
+
+        typer.echo("\n  ✓ Purge complete. Run `python main.py run` to repopulate.\n")
+    finally:
+        db.close()
 
 
 @app.command()

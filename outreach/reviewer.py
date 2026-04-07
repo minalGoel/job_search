@@ -235,4 +235,5 @@ def start_review_server(db: OutreachDB) -> None:
         server.serve_forever()
     except KeyboardInterrupt:
         server.shutdown()
+        server.server_close()
         print("\n  Review server stopped.")

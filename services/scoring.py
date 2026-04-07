@@ -35,10 +35,27 @@ def _normalize(text: str) -> str:
     return re.sub(r"\s+", " ", text.strip().lower())
 
 
-def _company_slug(name: str) -> str:
-    """Return normalized company slug for matching."""
+_LEGAL_SUFFIXES: frozenset[str] = frozenset({
+    "pvt", "ltd", "limited", "private", "inc", "incorporated",
+    "corp", "corporation", "llc", "technologies", "technology",
+    "software", "solutions", "india", "services", "labs",
+    "company", "co", "group", "global", "intl", "international",
+    "pte", "plc", "gmbh", "sa", "ag", "bv",
+})
+
+
+def _company_slug(name: str | None) -> str:
+    """Return normalized company slug for matching.
+
+    Strips punctuation AND legal suffixes (pvt, ltd, technologies, ...)
+    so that "X Technologies Pvt Ltd" and "X" both slug to "x". This
+    matches the contract documented in CLAUDE.md.
+    """
+    if not name:
+        return ""
     s = re.sub(r"[^a-z0-9 ]", "", _normalize(name))
-    return re.sub(r"\s+", " ", s).strip()
+    tokens = [t for t in s.split() if t and t not in _LEGAL_SUFFIXES]
+    return " ".join(tokens)
 
 
 def _slug_tokens(name: str) -> set[str]:
@@ -165,7 +182,13 @@ def score_job(job: dict, company_profile: Optional[dict] = None) -> dict:
                 break
 
     # Direct platform source
-    is_direct = platform in DIRECT_SOURCE_PLATFORMS
+    # Direct-source detection: include both explicit names in DIRECT_SOURCE_PLATFORMS
+    # AND dynamically-named VC/MNC scrapers that emit "vc_*" / "mnc_*".
+    is_direct = (
+        platform in DIRECT_SOURCE_PLATFORMS
+        or platform.startswith("vc_")
+        or platform.startswith("mnc_")
+    )
     if is_direct:
         relevance += 10
         reasons.append("direct_source")

@@ -12,6 +12,7 @@ from playwright.async_api import Page, Response
 
 from browser.context import BrowserManager
 from models.job import Job
+from services.location_filter import is_acceptable_location, explain as explain_location
 from vc_portals.registry import VC_REGISTRY, VCFund
 
 log = structlog.get_logger(__name__)
@@ -22,7 +23,6 @@ PM_KEYWORDS = [
     "vp product", "chief product", "associate pm", "founding pm",
     "principal pm", "staff pm",
 ]
-LOCATION_KEYWORDS = ["delhi", "ncr", "gurugram", "gurgaon", "noida", "india", "remote", "anywhere"]
 
 
 def _is_pm_role(title: str) -> bool:
@@ -73,41 +73,48 @@ class VCPortalScraper:
                 except Exception:
                     pass
 
-        page = await self._get_page(vc.job_portal_url, _intercept)
-        await asyncio.sleep(3)
+        page = None
+        try:
+            page = await self._get_page(vc.job_portal_url, _intercept)
+            await asyncio.sleep(3)
 
-        # Try typing "product manager" into any search/title input to trigger filtered results
-        for selector in [
-            'input[placeholder*="title"]', 'input[placeholder*="Title"]',
-            'input[placeholder*="search"]', 'input[placeholder*="Search"]',
-            'input[placeholder*="role"]', 'input[placeholder*="Role"]',
-            'input[type="search"]',
-        ]:
-            try:
-                inp = await page.query_selector(selector)
-                if inp:
-                    await inp.fill("product manager")
-                    await asyncio.sleep(3)
-                    self._log.debug("vc.search_typed", vc=vc.name, selector=selector)
-                    break
-            except Exception:
-                pass
+            # Try typing "product manager" into any search/title input to trigger filtered results
+            for selector in [
+                'input[placeholder*="title"]', 'input[placeholder*="Title"]',
+                'input[placeholder*="search"]', 'input[placeholder*="Search"]',
+                'input[placeholder*="role"]', 'input[placeholder*="Role"]',
+                'input[type="search"]',
+            ]:
+                try:
+                    inp = await page.query_selector(selector)
+                    if inp:
+                        await inp.fill(PM_KEYWORDS[0])
+                        await asyncio.sleep(3)
+                        self._log.debug("vc.search_typed", vc=vc.name, selector=selector)
+                        break
+                except Exception:
+                    pass
 
-        jobs: list[Job] = []
+            jobs: list[Job] = []
 
-        # --- Strategy 1: JSON API ---
-        if captured_api:
-            jobs = self._parse_api_responses(captured_api, vc)
-            self._log.info("vc.api_parsed", vc=vc.name, jobs=len(jobs))
+            # --- Strategy 1: JSON API ---
+            if captured_api:
+                jobs = self._parse_api_responses(captured_api, vc)
+                self._log.info("vc.api_parsed", vc=vc.name, jobs=len(jobs))
 
-        # --- Strategy 2: HTML fallback ---
-        if not jobs:
-            html = await page.content()
-            jobs = self._parse_html(html, vc)
-            self._log.info("vc.html_parsed", vc=vc.name, jobs=len(jobs))
+            # --- Strategy 2: HTML fallback ---
+            if not jobs:
+                html = await page.content()
+                jobs = self._parse_html(html, vc)
+                self._log.info("vc.html_parsed", vc=vc.name, jobs=len(jobs))
 
-        await page.close()
-        return jobs
+            return jobs
+        finally:
+            if page is not None:
+                try:
+                    await page.close()
+                except Exception:
+                    pass
 
     def _parse_api_responses(self, responses: list[dict], vc: VCFund) -> list[Job]:
         jobs: list[Job] = []
@@ -162,6 +169,13 @@ class VCPortalScraper:
                         apply_link = urljoin(vc.job_portal_url, apply_link)
 
                     if not (title and apply_link):
+                        continue
+
+                    # Reject jobs outside Delhi NCR / global remote
+                    if not is_acceptable_location(location):
+                        self._log.debug("vc.api_filtered_location",
+                                        vc=vc.name, title=title, company=company,
+                                        reason=explain_location(location))
                         continue
 
                     jobs.append(Job(
@@ -220,6 +234,12 @@ class VCPortalScraper:
                         location = loc_el.get_text(strip=True)
 
                 if title and href:
+                    # Reject jobs outside Delhi NCR / global remote
+                    if not is_acceptable_location(location):
+                        self._log.debug("vc.html_filtered_location",
+                                        vc=vc.name, title=title, company=company,
+                                        reason=explain_location(location))
+                        continue
                     jobs.append(Job(
                         platform=f"vc_{vc.name.lower().replace(' ', '_').replace('(', '').replace(')', '')}",
                         title=title,
@@ -243,5 +263,6 @@ class VCPortalScraper:
         try:
             await page.goto(url, wait_until="domcontentloaded", timeout=30_000)
         except Exception:
-            self._log.debug("vc.goto_timeout", url=url)
+            await page.close()  # close before re-raising — no leaked page
+            raise
         return page

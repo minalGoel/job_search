@@ -9,6 +9,7 @@ import structlog
 
 from models.job import Job
 from scrapers.base import BaseScraper
+from services.location_filter import is_acceptable_location, explain as explain_location
 
 log = structlog.get_logger(__name__)
 
@@ -83,13 +84,29 @@ class WeWorkRemotelyScraper(BaseScraper):
                 # Categories as skills
                 skills = [cat.text for cat in item.findall("category") if cat.text]
 
+                # Read the dedicated <region> element directly — as of Apr 2026 the
+                # RSS feed exposes region as a first-class XML child of <item>, NOT
+                # embedded in the <description> CDATA body.
+                raw_region = (item.findtext("region") or "").strip()
+                # Normalise to a location string the filter understands.
+                if raw_region:
+                    location = f"Remote — {raw_region}"
+                else:
+                    location = "Remote"
+
                 if title and link:
+                    # Reject region-restricted remotes that don't include India
+                    if not is_acceptable_location(location):
+                        self._log.debug("wwr.filtered_location",
+                                        title=title, company=company,
+                                        reason=explain_location(location))
+                        continue
                     jobs.append(
                         Job(
                             platform="weworkremotely",
                             title=title,
                             company=company,
-                            location="Remote",
+                            location=location,
                             posted_date=posted_date,
                             skills=skills,
                             description=description[:2000],

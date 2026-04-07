@@ -17,6 +17,8 @@ import urllib.parse
 from datetime import datetime
 from typing import TYPE_CHECKING, Optional
 
+from services.scoring import _company_slug
+
 if TYPE_CHECKING:
     from storage.db import JobDB
 
@@ -27,18 +29,6 @@ if TYPE_CHECKING:
 
 def _normalize(text: str) -> str:
     return re.sub(r"\s+", " ", text.strip().lower())
-
-
-def _company_slug(name: str) -> str:
-    """Normalised slug: remove punctuation, common legal suffixes."""
-    s = re.sub(r"[^a-z0-9 ]", "", _normalize(name))
-    suffixes = {
-        "pvt", "ltd", "limited", "private", "inc", "incorporated",
-        "corp", "corporation", "llc", "technologies", "technology",
-        "software", "solutions", "india", "services", "labs", "ventures",
-    }
-    words = [w for w in s.split() if w not in suffixes]
-    return " ".join(words).strip()
 
 
 def _extract_domain(url: str) -> str:
@@ -198,7 +188,7 @@ def enrich_from_funding_data(db: "JobDB", output_dir: Optional[str] = None) -> i
 
             round_text = _normalize(row.get("Last Round (Date & Series)") or "")
             funding_series: Optional[str] = None
-            for series in ["series d", "series c", "series b", "series a", "seed", "pre-seed"]:
+            for series in ["series d", "series c", "series b", "series a", "pre-seed", "seed"]:
                 if series in round_text:
                     funding_series = series.title()
                     break

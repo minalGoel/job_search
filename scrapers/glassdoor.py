@@ -10,6 +10,7 @@ from bs4 import BeautifulSoup
 
 from models.job import Job
 from scrapers.base import BaseScraper
+from services.location_filter import is_acceptable_location
 
 log = structlog.get_logger(__name__)
 
@@ -57,22 +58,29 @@ class GlassdoorScraper(BaseScraper):
         # Extra delay before even trying
         await asyncio.sleep(random.uniform(5.0, 10.0))
 
+        page = None
         try:
-            page = await self._get_page(url)
-        except Exception:
-            self._log.warning("glassdoor.blocked_on_load")
-            return []
+            try:
+                page = await self._get_page(url)
+            except Exception:
+                self._log.warning("glassdoor.blocked_on_load")
+                return []
 
-        # Check for Cloudflare challenge
-        content = await page.content()
-        if "challenge" in content.lower() or "captcha" in content.lower():
-            self._log.warning("glassdoor.cloudflare_challenge")
-            await page.close()
-            return []
+            # Check for Cloudflare challenge
+            content = await page.content()
+            if "challenge" in content.lower() or "captcha" in content.lower():
+                self._log.warning("glassdoor.cloudflare_challenge")
+                return []
 
-        await asyncio.sleep(3)
-        # Re-fetch after sleep so JS-rendered content is included
-        html = await page.content()
+            await asyncio.sleep(3)
+            # Re-fetch after sleep so JS-rendered content is included
+            html = await page.content()
+        finally:
+            if page is not None:
+                try:
+                    await page.close()
+                except Exception:
+                    pass
         soup = BeautifulSoup(html, "html.parser")
         jobs: list[Job] = []
 
@@ -126,6 +134,10 @@ class GlassdoorScraper(BaseScraper):
                 if not (title and apply_link):
                     continue
 
+                if not is_acceptable_location(location):
+                    self._log.debug("card.location_rejected", title=title, location=location)
+                    continue
+
                 # No detail page fetching for Glassdoor (too risky)
                 jobs.append(
                     Job(
@@ -143,6 +155,5 @@ class GlassdoorScraper(BaseScraper):
             except Exception:
                 self._log.exception("card.parse_failed")
 
-        await page.close()
         self._log.info("glassdoor.done", jobs_found=len(jobs))
         return jobs

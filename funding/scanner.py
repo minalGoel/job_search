@@ -440,7 +440,14 @@ class FundingScanner:
         from pathlib import Path
         context = await self.bm.get_context("funding_scanner", Path("cookies"))
         page = await context.new_page()
-        await page.goto(url, wait_until="domcontentloaded", timeout=30_000)
+        try:
+            await page.goto(url, wait_until="domcontentloaded", timeout=30_000)
+        except Exception:
+            try:
+                await page.close()
+            except Exception:
+                pass
+            raise
         return page
 
     @staticmethod
