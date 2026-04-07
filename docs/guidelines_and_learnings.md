@@ -220,7 +220,24 @@ If one scraper leaks pages on exception, the other 13 probably do too. If one en
 
 ---
 
-## 18. Tests in three layers
+## 18. Frontend: design tokens in one place, mirrored in JS
+
+The dashboard (`static/index.html`) applies the same single-source-of-truth principle as the backend:
+
+- **CSS `:root`** is the sole definition point for every color — page surfaces, text hierarchy, accent, semantic palette, sidebar tokens (`--sb-*`), and log console tokens (`--log-*`). No hex values appear in CSS rules or HTML inline styles outside this block.
+- **`const DS`** at the top of the `<script>` block mirrors every token used by render functions. JS logic references `DS.grn`, `DS.amb`, `DS.acc`, etc. — never raw hex strings.
+
+**Why this matters:** The sidebar was hardcoded with dark hex values (`#0E1219`, `#C8D6E5`, `#3A4E62`). A full light-mode redesign updated every other surface but the sidebar stayed dark, because its colors were invisible to the theme refactor. The bug was caused by ~40 scattered hex values across CSS, HTML, and JS that shared no common ancestry.
+
+**Rule:** Adding a color anywhere in the file is a two-edit operation:
+1. Define the token in `:root` (CSS) and `DS` (JS)
+2. Reference it by name everywhere else
+
+If you find a raw hex value outside `:root` / `DS`, treat it as a bug of the same class as an inline location allowlist in a scraper — extract it first.
+
+---
+
+## 19. Tests in three layers
 
 1. **Compile check** — every touched module imports cleanly. Cheapest, fastest, most reliable.
 2. **Behavioral smoke test** — one Python inline script that imports the changed functions and asserts the specific behaviour you claim to have fixed. This is where you catch "the fix compiled but doesn't actually fix the bug."

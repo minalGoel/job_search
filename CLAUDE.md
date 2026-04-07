@@ -219,3 +219,4 @@ Key rules:
 - Never access `db.conn` directly from outside `storage/db.py`. Add a method to `JobDB` instead.
 - `update_job_warmth_score()` in `JobDB` does NOT commit — caller must call `db.conn.commit()` after a batch to avoid N commits in a loop.
 - `data/candidate_profile.json` must be filled in before `draft-message` produces useful output.
+- **Dashboard design system** (`static/index.html`): all color tokens are defined once in CSS `:root` and mirrored in `const DS` at the top of the `<script>` block. Never add a raw hex value outside these two locations — hardcoded colors in component CSS/HTML/JS silently diverge from theme changes (this is what kept the sidebar dark after a full light-mode redesign). See `docs/guidelines_and_learnings.md` rule 18.

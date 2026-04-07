@@ -11,43 +11,86 @@
 <script>tailwind.config={darkMode:'class'}</script>
 <style>
 /* ══════════════════════════════════════════════
-   LINEN — warm cream light mode
-   Dark sidebar · Forest teal accent · Paper surfaces
+   DESIGN SYSTEM — PMHunt Linen
+   Single source of truth: all color tokens live
+   in :root. No hex values appear outside this
+   block. JS mirrors these in the DS constant.
    ══════════════════════════════════════════════ */
 :root {
-  /* Page surfaces */
-  --bg:    #F2F0E8;   /* warm cream — the signature treatment */
-  --surf:  #E8E5DC;   /* recessed: email body, funnel bars, code bg */
-  --card:  #FFFFFF;   /* pure white cards pop against cream */
-  --card2: #F8F6F1;   /* secondary / slight elevation */
+  /* ── Page surfaces ──────────────────────────── */
+  --bg:    #F2F0E8;   /* warm cream — main page bg  */
+  --surf:  #E8E5DC;   /* recessed: inset areas      */
+  --card:  #FFFFFF;   /* pure white card surfaces   */
+  --card2: #F8F6F1;   /* secondary / slight lift    */
 
-  /* Borders */
+  /* ── Borders ────────────────────────────────── */
   --br:    #DDD8CC;
   --brh:   #C4BDB0;
 
-  /* Text hierarchy */
-  --t1:    #141820;   /* near-black, slightly warm */
-  --t2:    #505A6E;   /* medium — secondary info */
-  --t3:    #9099AE;   /* muted — labels, timestamps */
+  /* ── Text hierarchy ─────────────────────────── */
+  --t1:    #141820;
+  --t2:    #505A6E;
+  --t3:    #9099AE;
 
-  /* Accent: Forest Teal */
-  --acc:   #0E7067;
-  --accl:  #0D9488;
-  --accd:  #0A5852;
-  --accg:  rgba(14,112,103,0.08);
+  /* ── Accent: Forest Teal ────────────────────── */
+  --acc:        #0E7067;
+  --accl:       #0D9488;
+  --accd:       #0A5852;
+  --accg:       rgba(14,112,103,0.08);
+  --accg-str:   rgba(14,112,103,0.13);
 
-  /* Semantic palette */
-  --grn:   #059669;   --grng:  rgba(5,150,105,0.09);
-  --amb:   #C97B00;   --ambg:  rgba(201,123,0,0.09);
-  --red:   #CC2828;   --redg:  rgba(204,40,40,0.09);
-  --pur:   #7C3AED;   --purg:  rgba(124,58,237,0.09);
-  --org:   #D95C10;   --orgg:  rgba(217,92,16,0.09);
-  --blu:   #2260D9;   --blug:  rgba(34,96,217,0.09);
+  /* ── Semantic palette ───────────────────────── */
+  --grn:  #059669;  --grng: rgba(5,150,105,0.10);
+  --amb:  #C97B00;  --ambg: rgba(201,123,0,0.10);
+  --red:  #CC2828;  --redg: rgba(204,40,40,0.10);
+  --pur:  #7C3AED;  --purg: rgba(124,58,237,0.10);
+  --org:  #D95C10;  --orgg: rgba(217,92,16,0.10);
+  --blu:  #2260D9;  --blug: rgba(34,96,217,0.10);
+  --neu:  #6B7280;  --neug: rgba(107,114,128,0.10);
+
+  /* ── Semantic status shortcuts ──────────────── */
+  --c-unscored:  #9CA3AF;
+  --c-scored:    var(--blu);
+  --c-must:      var(--pur);
+  --c-high:      var(--amb);
+  --c-applied:   var(--grn);
+  --c-screening: var(--org);
+  --c-interview: var(--pur);
+  --c-offer:     var(--amb);
+  --c-rejected:  var(--red);
+  --c-saved:     var(--acc);
+
+  /* ── Sidebar (light) ─────────────────────────── */
+  --sb-bg:           var(--card);
+  --sb-border:       var(--br);
+  --sb-nav-cl:       var(--t2);
+  --sb-nav-hover-bg: var(--accg);
+  --sb-nav-hover-cl: var(--acc);
+  --sb-nav-act-bg:   var(--accg-str);
+  --sb-nav-act-cl:   var(--acc);
+  --sb-nav-act-br:   var(--acc);
+  --sb-badge-bg:     var(--surf);
+  --sb-badge-cl:     var(--t3);
+  --sb-section-cl:   var(--t3);
+
+  /* ── Log console (terminal — stays dark) ───────── */
+  --log-bg:       #0C111A;
+  --log-head-bg:  #0A0E16;
+  --log-head-br:  rgba(255,255,255,0.06);
+  --log-t2:       #4A5E74;
+  --log-running:  #2DD4C0;
+  --log-done-ok:  #34D399;
+  --log-done-err: #F87171;
+  --log-line:     #4A5E74;
+  --log-info:     #60A5FA;
+  --log-success:  #34D399;
+  --log-warn:     #FBBF24;
+  --log-error:    #F87171;
 
   --sw: 210px;
 }
 
-/* ── Reset ─────────────────────────────────── */
+/* ── Reset ──────────────────────────────────── */
 *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
 
 body {
@@ -59,14 +102,14 @@ body {
   display: flex;
 }
 
-/* Subtle warm ambient — keeps background from feeling flat */
+/* Subtle warm ambient glow */
 body::after {
   content: '';
   position: fixed;
   top: 0; left: var(--sw); right: 0; bottom: 0;
   background:
-    radial-gradient(ellipse 60% 40% at 85% 5%, rgba(14,112,103,0.05) 0%, transparent 60%),
-    radial-gradient(ellipse 50% 50% at 10% 90%, rgba(201,123,0,0.04) 0%, transparent 55%);
+    radial-gradient(ellipse 60% 40% at 85% 5%, var(--accg) 0%, transparent 60%),
+    radial-gradient(ellipse 50% 50% at 10% 90%, var(--ambg) 0%, transparent 55%);
   pointer-events: none;
   z-index: 0;
 }
@@ -74,14 +117,16 @@ body::after {
 ::-webkit-scrollbar{width:5px;height:5px}
 ::-webkit-scrollbar-track{background:transparent}
 ::-webkit-scrollbar-thumb{background:var(--brh);border-radius:4px}
-::-webkit-scrollbar-thumb:hover{background:#A8A198}
+::-webkit-scrollbar-thumb:hover{background:var(--br)}
 
-/* ── SIDEBAR — stays dark for contrast & nav clarity ── */
+/* ════════════════════════════════════════════
+   SIDEBAR — light, consistent with app theme
+   ════════════════════════════════════════════ */
 #sidebar {
   width: var(--sw);
   flex-shrink: 0;
-  background: #0E1219;
-  border-right: 1px solid rgba(255,255,255,0.07);
+  background: var(--sb-bg);
+  border-right: 1px solid var(--sb-border);
   display: flex;
   flex-direction: column;
   height: 100vh;
@@ -90,12 +135,13 @@ body::after {
   position: relative;
 }
 
-/* Subtle sidebar top accent */
-#sidebar::after {
+/* Teal brand accent line at the very top */
+#sidebar::before {
   content: '';
   position: absolute;
-  top: 0; left: 0; right: 0; height: 1px;
-  background: linear-gradient(90deg, rgba(13,148,136,0.6), transparent);
+  top: 0; left: 0; right: 0; height: 3px;
+  background: linear-gradient(90deg, var(--acc), var(--accl), transparent);
+  z-index: 1;
 }
 
 .nav-item {
@@ -104,7 +150,7 @@ body::after {
   gap: 9px;
   padding: 8px 16px 8px 12px;
   font-size: 13px;
-  color: #7B8EA6;
+  color: var(--sb-nav-cl);
   cursor: pointer;
   border-left: 2px solid transparent;
   margin: 1px 0;
@@ -112,14 +158,14 @@ body::after {
   white-space: nowrap;
 }
 .nav-item:hover {
-  background: rgba(255,255,255,0.055);
-  color: #C8D6E5;
-  border-left-color: rgba(255,255,255,0.15);
+  background: var(--sb-nav-hover-bg);
+  color: var(--sb-nav-hover-cl);
+  border-left-color: var(--accg-str);
 }
 .nav-item.active {
-  background: rgba(13,148,136,0.18);
-  color: #2DD4C0;
-  border-left-color: #2DD4C0;
+  background: var(--sb-nav-act-bg);
+  color: var(--sb-nav-act-cl);
+  border-left-color: var(--sb-nav-act-br);
   font-weight: 500;
 }
 .nav-item .badge {
@@ -129,9 +175,15 @@ body::after {
   border-radius: 20px;
   font-family: 'JetBrains Mono', monospace;
   font-weight: 600;
+  background: var(--sb-badge-bg);
+  color: var(--sb-badge-cl);
+}
+.nav-item.active .badge {
+  background: var(--accg);
+  color: var(--acc);
 }
 
-/* ── MAIN + SCREENS ───────────────────────── */
+/* ── MAIN + SCREENS ─────────────────────────── */
 #main {
   flex: 1;
   overflow: hidden;
@@ -144,7 +196,7 @@ body::after {
 .screen.active{display:flex;animation:screenIn .18s ease}
 @keyframes screenIn{from{opacity:0;transform:translateY(3px)}to{opacity:1;transform:none}}
 
-/* ── TOPBAR ──────────────────────────────── */
+/* ── TOPBAR ─────────────────────────────────── */
 .topbar {
   padding: 13px 24px;
   border-bottom: 1px solid var(--br);
@@ -165,7 +217,7 @@ body::after {
 }
 .topbar p{font-size:12px;color:var(--t3);margin-top:2px}
 
-/* ── STAT CARDS ──────────────────────────── */
+/* ── STAT CARDS ─────────────────────────────── */
 .stat-card {
   background: var(--card);
   border: 1px solid var(--br);
@@ -207,7 +259,7 @@ body::after {
 }
 .stat-card .sub{font-size:11px;color:var(--t3);margin-top:7px}
 
-/* ── BUTTONS ─────────────────────────────── */
+/* ── BUTTONS ────────────────────────────────── */
 .btn-primary {
   background: var(--acc);
   color: #FFFFFF;
@@ -223,10 +275,7 @@ body::after {
   transition: all .15s;
   font-family: 'DM Sans', sans-serif;
 }
-.btn-primary:hover {
-  background: var(--accl);
-  box-shadow: 0 2px 10px rgba(14,112,103,0.28);
-}
+.btn-primary:hover{background:var(--accl);box-shadow:0 2px 10px var(--accg-str)}
 .btn-primary:disabled{opacity:.4;cursor:not-allowed;box-shadow:none}
 
 .btn-ghost {
@@ -247,7 +296,7 @@ body::after {
 .btn-danger {
   background: transparent;
   color: var(--red);
-  border: 1px solid rgba(204,40,40,0.25);
+  border: 1px solid var(--redg);
   padding: 5px 10px;
   border-radius: 6px;
   font-size: 11px;
@@ -259,7 +308,7 @@ body::after {
 .btn-success {
   background: transparent;
   color: var(--grn);
-  border: 1px solid rgba(5,150,105,0.25);
+  border: 1px solid var(--grng);
   padding: 5px 10px;
   border-radius: 6px;
   font-size: 11px;
@@ -268,7 +317,7 @@ body::after {
 }
 .btn-success:hover{background:var(--grng);border-color:var(--grn)}
 
-/* ── TABLE ───────────────────────────────── */
+/* ── TABLE ──────────────────────────────────── */
 .data-table{width:100%;border-collapse:collapse;font-size:13px}
 .data-table th {
   text-align: left;
@@ -286,11 +335,11 @@ body::after {
   font-family: 'JetBrains Mono', monospace;
 }
 .data-table td{padding:11px 14px;border-bottom:1px solid var(--br);vertical-align:middle}
-.data-table tr.row-hover:hover td{background:rgba(14,112,103,0.03)}
-.data-table tr.applied td{background:rgba(5,150,105,0.05)}
-.data-table tr.shortlisted td{background:rgba(14,112,103,0.05)}
+.data-table tr.row-hover:hover td{background:var(--accg)}
+.data-table tr.applied td{background:var(--grng)}
+.data-table tr.shortlisted td{background:var(--accg)}
 
-/* ── INPUTS ──────────────────────────────── */
+/* ── INPUTS ─────────────────────────────────── */
 .input {
   background: var(--card);
   border: 1px solid var(--br);
@@ -302,7 +351,7 @@ body::after {
   font-family: 'DM Sans', sans-serif;
   transition: border-color .15s, box-shadow .15s;
 }
-.input:focus{border-color:var(--acc);box-shadow:0 0 0 3px rgba(14,112,103,0.1)}
+.input:focus{border-color:var(--acc);box-shadow:0 0 0 3px var(--accg)}
 
 .select {
   background: var(--card);
@@ -318,7 +367,7 @@ body::after {
 }
 .select:focus{border-color:var(--acc)}
 
-/* ── CHIPS — pastel on white/light ────────── */
+/* ── CHIPS — pastel semantic system ─────────── */
 .chip {
   display: inline-flex;
   align-items: center;
@@ -328,19 +377,19 @@ body::after {
   font-weight: 600;
   font-family: 'JetBrains Mono', monospace;
 }
-.chip-must     {background:#EDE9FE;color:#5B21B6;border:1px solid #C4B5FD}
-.chip-high     {background:#FEF3C7;color:#92400E;border:1px solid #FCD34D}
-.chip-medium   {background:#FFEDD5;color:#9A3412;border:1px solid #FDBA74}
-.chip-low      {background:#F3F4F6;color:#6B7280;border:1px solid #D1D5DB}
-.chip-applied  {background:#D1FAE5;color:#065F46;border:1px solid #6EE7B7}
+.chip-must      {background:#EDE9FE;color:#5B21B6;border:1px solid #C4B5FD}
+.chip-high      {background:#FEF3C7;color:#92400E;border:1px solid #FCD34D}
+.chip-medium    {background:#FFEDD5;color:#9A3412;border:1px solid #FDBA74}
+.chip-low       {background:#F3F4F6;color:#6B7280;border:1px solid #D1D5DB}
+.chip-applied   {background:#D1FAE5;color:#065F46;border:1px solid #6EE7B7}
 .chip-shortlisted{background:#CCFBF1;color:#134E4A;border:1px solid #5EEAD4}
-.chip-screening{background:#FFEDD5;color:#9A3412;border:1px solid #FDBA74}
-.chip-interview{background:#EDE9FE;color:#5B21B6;border:1px solid #C4B5FD}
-.chip-ok       {background:#D1FAE5;color:#065F46;border:1px solid #6EE7B7}
-.chip-warning  {background:#FEF3C7;color:#92400E;border:1px solid #FCD34D}
-.chip-blocked  {background:#FEE2E2;color:#991B1B;border:1px solid #FCA5A5}
+.chip-screening {background:#FFEDD5;color:#9A3412;border:1px solid #FDBA74}
+.chip-interview {background:#EDE9FE;color:#5B21B6;border:1px solid #C4B5FD}
+.chip-ok        {background:#D1FAE5;color:#065F46;border:1px solid #6EE7B7}
+.chip-warning   {background:#FEF3C7;color:#92400E;border:1px solid #FCD34D}
+.chip-blocked   {background:#FEE2E2;color:#991B1B;border:1px solid #FCA5A5}
 
-/* ── PLATFORM BADGE ──────────────────────── */
+/* ── PLATFORM BADGE ─────────────────────────── */
 .plt {
   font-size: 9px;
   padding: 2px 7px;
@@ -352,12 +401,12 @@ body::after {
   border: 1px solid;
 }
 
-/* ── SCORE BAR ───────────────────────────── */
+/* ── SCORE BAR ──────────────────────────────── */
 .score-bar{display:flex;align-items:center;gap:7px}
-.score-track{flex:1;height:4px;background:#E5E7EB;border-radius:4px;overflow:hidden}
+.score-track{flex:1;height:4px;background:var(--surf);border-radius:4px;overflow:hidden}
 .score-fill{height:100%;border-radius:4px;transition:width .4s ease}
 
-/* ── KANBAN ──────────────────────────────── */
+/* ── KANBAN ─────────────────────────────────── */
 .kanban-col{flex-shrink:0;width:244px}
 .kanban-header{display:flex;align-items:center;gap:8px;margin-bottom:10px;padding:0 2px}
 .kanban-card {
@@ -380,9 +429,9 @@ body::after {
 .kanban-card:active{cursor:grabbing}
 .kanban-card.drag-over{border-color:var(--acc);background:var(--accg)}
 .kanban-drop{min-height:200px;border-radius:8px;padding:4px;transition:background .15s}
-.kanban-drop.drag-target{background:rgba(14,112,103,0.04);outline:2px dashed var(--brh);border-radius:8px}
+.kanban-drop.drag-target{background:var(--accg);outline:2px dashed var(--brh);border-radius:8px}
 
-/* ── EMAIL CARD ──────────────────────────── */
+/* ── EMAIL CARD ─────────────────────────────── */
 .email-card {
   background: var(--card);
   border: 1px solid var(--br);
@@ -415,7 +464,7 @@ body::after {
 .email-body.expanded{max-height:none}
 .email-body.expanded::after{display:none}
 
-/* ── SCRAPER CARD ────────────────────────── */
+/* ── SCRAPER CARD ───────────────────────────── */
 .scraper-card {
   background: var(--card);
   border: 1px solid var(--br);
@@ -427,19 +476,19 @@ body::after {
 .scraper-card:hover{border-color:var(--brh);transform:translateY(-1px);box-shadow:0 4px 12px rgba(0,0,0,0.09)}
 
 .health-dot{width:8px;height:8px;border-radius:50%;flex-shrink:0}
-.health-ok     {background:#10B981;box-shadow:0 0 5px rgba(16,185,129,.4);animation:hpulse 2.5s infinite}
-.health-warning{background:#F59E0B;box-shadow:0 0 5px rgba(245,158,11,.4)}
-.health-blocked{background:#EF4444;box-shadow:0 0 5px rgba(239,68,68,.4)}
-@keyframes hpulse{0%,100%{box-shadow:0 0 4px rgba(16,185,129,.35)}50%{box-shadow:0 0 9px rgba(16,185,129,.65)}}
+.health-ok     {background:var(--grn);box-shadow:0 0 5px var(--grng);animation:hpulse 2.5s infinite}
+.health-warning{background:var(--amb);box-shadow:0 0 5px var(--ambg)}
+.health-blocked{background:var(--red);box-shadow:0 0 5px var(--redg)}
+@keyframes hpulse{0%,100%{box-shadow:0 0 4px var(--grng)}50%{box-shadow:0 0 9px var(--grng)}}
 
-/* ── LOG CONSOLE — dark to match sidebar ─── */
+/* ── LOG CONSOLE — terminal aesthetic, stays dark ── */
 #log-console {
   position: fixed;
   bottom: 0;
   left: var(--sw);
   right: 0;
   z-index: 100;
-  background: #0C111A;
+  background: var(--log-bg);
   border-top: 2px solid var(--acc);
   transform: translateY(100%);
   transition: transform .3s cubic-bezier(.4,0,.2,1);
@@ -454,13 +503,13 @@ body::after {
   font-size: 11px;
   line-height: 1.8;
 }
-.log-line{color:#4A5E74}
-.log-line.info{color:#60A5FA}
-.log-line.success{color:#34D399}
-.log-line.warn{color:#FBBF24}
-.log-line.error{color:#F87171}
+.log-line{color:var(--log-line)}
+.log-line.info{color:var(--log-info)}
+.log-line.success{color:var(--log-success)}
+.log-line.warn{color:var(--log-warn)}
+.log-line.error{color:var(--log-error)}
 
-/* ── TOAST ───────────────────────────────── */
+/* ── TOAST ──────────────────────────────────── */
 #toast-container{position:fixed;top:20px;right:20px;z-index:9999;display:flex;flex-direction:column;gap:8px;pointer-events:none}
 .toast {
   background: var(--card);
@@ -483,16 +532,16 @@ body::after {
 .toast.error{border-left:3px solid var(--red)}
 .toast.info{border-left:3px solid var(--acc)}
 
-/* ── MISC ────────────────────────────────── */
+/* ── MISC ───────────────────────────────────── */
 .skeleton {
-  background: linear-gradient(90deg, var(--card2) 25%, #FFFFFF 50%, var(--card2) 75%);
+  background: linear-gradient(90deg, var(--card2) 25%, var(--card) 50%, var(--card2) 75%);
   background-size: 200% 100%;
   animation: shimmer 1.5s infinite;
   border-radius: 8px;
 }
 @keyframes shimmer{0%{background-position:200% 0}100%{background-position:-200% 0}}
 
-.pbar{height:4px;background:#E5E7EB;border-radius:4px;overflow:hidden}
+.pbar{height:4px;background:var(--surf);border-radius:4px;overflow:hidden}
 .pbar-fill{height:100%;border-radius:4px;transition:width .4s ease}
 
 .funnel-row{display:flex;align-items:center;gap:10px;padding:3px 0}
@@ -533,7 +582,7 @@ body::after {
   cursor: pointer;
   transition: background .1s;
 }
-.action-item:hover{background:rgba(14,112,103,0.04)}
+.action-item:hover{background:var(--accg)}
 .action-item:last-child{border-bottom:none}
 .action-icon{width:34px;height:34px;border-radius:9px;display:flex;align-items:center;justify-content:center;flex-shrink:0;font-size:15px}
 
@@ -553,36 +602,38 @@ body::after {
 </head>
 <body>
 
-<!-- ── Sidebar (dark) ──────────────────────── -->
+<!-- ════════════════════════════════════════════
+     SIDEBAR — light, design-system consistent
+     ════════════════════════════════════════════ -->
 <aside id="sidebar">
-  <div style="padding:18px 16px 14px;border-bottom:1px solid rgba(255,255,255,0.07)">
+  <div style="padding:18px 16px 14px;border-bottom:1px solid var(--sb-border);margin-top:3px">
     <div style="display:flex;align-items:center;gap:10px">
-      <div style="width:30px;height:30px;background:linear-gradient(135deg,#0A5852,#0D9488);border-radius:8px;display:flex;align-items:center;justify-content:center;font-family:'Syne',sans-serif;font-size:10px;font-weight:800;color:#fff;letter-spacing:-0.5px;flex-shrink:0;box-shadow:0 2px 8px rgba(13,148,136,0.35)">PM</div>
+      <div style="width:30px;height:30px;background:linear-gradient(135deg,var(--accd),var(--accl));border-radius:8px;display:flex;align-items:center;justify-content:center;font-family:'Syne',sans-serif;font-size:10px;font-weight:800;color:#fff;letter-spacing:-0.5px;flex-shrink:0;box-shadow:0 2px 8px var(--accg-str)">PM</div>
       <div>
-        <div style="font-family:'Syne',sans-serif;font-size:13px;font-weight:700;color:#C8D6E5">PMHunt</div>
-        <div style="font-size:10px;color:#3A4E62;font-family:'JetBrains Mono',monospace">Delhi NCR · 40+ LPA</div>
+        <div style="font-family:'Syne',sans-serif;font-size:13px;font-weight:700;color:var(--t1)">PMHunt</div>
+        <div style="font-size:10px;color:var(--t3);font-family:'JetBrains Mono',monospace">Delhi NCR · 40+ LPA</div>
       </div>
     </div>
   </div>
   <nav style="padding:10px 0;flex:1">
-    <div style="padding:10px 16px 5px;font-size:9px;font-weight:600;color:#3A4E62;letter-spacing:.12em;text-transform:uppercase;font-family:'JetBrains Mono',monospace">Main</div>
+    <div style="padding:10px 16px 5px;font-size:9px;font-weight:600;color:var(--sb-section-cl);letter-spacing:.12em;text-transform:uppercase;font-family:'JetBrains Mono',monospace">Main</div>
     <div class="nav-item active" data-screen="dashboard" onclick="navigate('dashboard')">
       <span>📊</span> Dashboard
-      <span class="badge" id="badge-dashboard" style="background:rgba(45,212,192,0.15);color:#2DD4C0"></span>
+      <span class="badge" id="badge-dashboard"></span>
     </div>
     <div class="nav-item" data-screen="jobs" onclick="navigate('jobs')">
       <span>💼</span> All Jobs
-      <span class="badge" id="badge-jobs" style="background:rgba(255,255,255,0.07);color:#4A5E74"></span>
+      <span class="badge" id="badge-jobs"></span>
     </div>
     <div class="nav-item" data-screen="tracker" onclick="navigate('tracker')">
       <span>📋</span> Tracker
-      <span class="badge" id="badge-tracker" style="background:rgba(255,255,255,0.07);color:#4A5E74"></span>
+      <span class="badge" id="badge-tracker"></span>
     </div>
     <div class="nav-item" data-screen="outreach" onclick="navigate('outreach')">
       <span>✉️</span> Outreach
-      <span class="badge" id="badge-outreach" style="background:rgba(5,150,105,0.18);color:#34D399"></span>
+      <span class="badge" id="badge-outreach" style="background:var(--grng);color:var(--grn)"></span>
     </div>
-    <div style="padding:10px 16px 5px;font-size:9px;font-weight:600;color:#3A4E62;letter-spacing:.12em;text-transform:uppercase;font-family:'JetBrains Mono',monospace;margin-top:4px">Sources</div>
+    <div style="padding:10px 16px 5px;font-size:9px;font-weight:600;color:var(--sb-section-cl);letter-spacing:.12em;text-transform:uppercase;font-family:'JetBrains Mono',monospace;margin-top:4px">Sources</div>
     <div class="nav-item" data-screen="scrapers" onclick="navigate('scrapers')">
       <span>⚙️</span> Scrapers
     </div>
@@ -592,23 +643,23 @@ body::after {
     <div class="nav-item" data-screen="funding" onclick="navigate('funding')">
       <span>📈</span> Funded Cos
     </div>
-    <div style="padding:10px 16px 5px;font-size:9px;font-weight:600;color:#3A4E62;letter-spacing:.12em;text-transform:uppercase;font-family:'JetBrains Mono',monospace;margin-top:4px">Insights</div>
+    <div style="padding:10px 16px 5px;font-size:9px;font-weight:600;color:var(--sb-section-cl);letter-spacing:.12em;text-transform:uppercase;font-family:'JetBrains Mono',monospace;margin-top:4px">Insights</div>
     <div class="nav-item" data-screen="analytics" onclick="navigate('analytics')">
       <span>🔬</span> Analytics
     </div>
   </nav>
-  <div style="padding:14px 16px;border-top:1px solid rgba(255,255,255,0.07)">
+  <div style="padding:14px 16px;border-top:1px solid var(--sb-border)">
     <div style="display:flex;align-items:center;gap:9px">
-      <div style="width:30px;height:30px;border-radius:50%;background:linear-gradient(135deg,#2563EB,#7C3AED);display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:700;color:#fff;font-family:'Syne',sans-serif;flex-shrink:0">MG</div>
+      <div style="width:30px;height:30px;border-radius:50%;background:linear-gradient(135deg,var(--blu),var(--pur));display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:700;color:#fff;font-family:'Syne',sans-serif;flex-shrink:0">MG</div>
       <div>
-        <div style="font-size:12px;font-weight:600;color:#C8D6E5">Minal Goel</div>
-        <div style="font-size:10px;color:#3A4E62">Sr. PM · 6 yrs</div>
+        <div style="font-size:12px;font-weight:600;color:var(--t1)">Minal Goel</div>
+        <div style="font-size:10px;color:var(--t3)">Sr. PM · 6 yrs</div>
       </div>
     </div>
   </div>
 </aside>
 
-<!-- ── Main ────────────────────────────────── -->
+<!-- ── Main ─────────────────────────────────── -->
 <div id="main">
 
 <!-- ════════════ DASHBOARD ═══════════════════ -->
@@ -826,16 +877,16 @@ body::after {
 
 </div><!-- #main -->
 
-<!-- ── Log Console ──────────────────────────── -->
+<!-- ── Log Console — terminal stays dark ────── -->
 <div id="log-console">
-  <div style="display:flex;align-items:center;justify-content:space-between;padding:8px 16px;border-bottom:1px solid rgba(255,255,255,0.06);background:#0A0E16">
+  <div style="display:flex;align-items:center;justify-content:space-between;padding:8px 16px;border-bottom:1px solid var(--log-head-br);background:var(--log-head-bg)">
     <div style="display:flex;align-items:center;gap:10px">
-      <span id="console-status" style="font-size:11px;font-family:'JetBrains Mono',monospace;color:#2DD4C0">● RUNNING</span>
-      <span id="console-cmd" style="font-size:11px;color:#4A5E74;font-family:'JetBrains Mono',monospace"></span>
+      <span id="console-status" style="font-size:11px;font-family:'JetBrains Mono',monospace;color:var(--log-running)">● RUNNING</span>
+      <span id="console-cmd" style="font-size:11px;color:var(--log-t2);font-family:'JetBrains Mono',monospace"></span>
     </div>
     <div style="display:flex;align-items:center;gap:10px">
       <div id="console-progress" style="width:160px"></div>
-      <button onclick="closeConsole()" style="background:none;border:none;color:#4A5E74;cursor:pointer;font-size:14px;padding:0 4px">✕</button>
+      <button onclick="closeConsole()" style="background:none;border:none;color:var(--log-t2);cursor:pointer;font-size:14px;padding:0 4px">✕</button>
     </div>
   </div>
   <div id="log-lines"></div>
@@ -844,6 +895,54 @@ body::after {
 <div id="toast-container"></div>
 
 <script>
+// ═══════════════════════════════════════════════════
+// DESIGN SYSTEM — JS mirror of CSS :root tokens
+// Update here when :root changes. All render
+// functions reference DS — no raw hex in logic.
+// ═══════════════════════════════════════════════════
+const DS = {
+  // Accent
+  acc:       '#0E7067',
+  accl:      '#0D9488',
+  accd:      '#0A5852',
+  accg:      'rgba(14,112,103,0.08)',
+  accgStr:   'rgba(14,112,103,0.13)',
+
+  // Semantic palette
+  grn:  '#059669',  grng: 'rgba(5,150,105,0.10)',
+  amb:  '#C97B00',  ambg: 'rgba(201,123,0,0.10)',
+  red:  '#CC2828',  redg: 'rgba(204,40,40,0.10)',
+  pur:  '#7C3AED',  purg: 'rgba(124,58,237,0.10)',
+  org:  '#D95C10',  orgg: 'rgba(217,92,16,0.10)',
+  blu:  '#2260D9',  blug: 'rgba(34,96,217,0.10)',
+  neu:  '#6B7280',  neug: 'rgba(107,114,128,0.10)',
+
+  // Text
+  t2:   '#505A6E',
+  t3:   '#9099AE',
+
+  // Surfaces
+  surf: '#E8E5DC',
+  br:   '#DDD8CC',
+
+  // Semantic status aliases
+  unscored:  '#9CA3AF',
+  scored:    '#2260D9',
+  must:      '#7C3AED',
+  high:      '#0E7067',
+  applied:   '#059669',
+  screening: '#D95C10',
+  interview: '#7C3AED',
+  offer:     '#C97B00',
+  rejected:  '#CC2828',
+  saved:     '#0E7067',
+
+  // Log console
+  logRunning: '#2DD4C0',
+  logDoneOk:  '#34D399',
+  logDoneErr: '#F87171',
+};
+
 // ═══════════════════════════════════════════════════
 // STATE & CONSTANTS
 // ═══════════════════════════════════════════════════
@@ -860,10 +959,10 @@ const STATE = {
 };
 
 const PLT_COLORS = {
-  naukri:'#2563eb', linkedin:'#ea580c', iimjobs:'#16a34a', wellfound:'#7c3aed',
+  naukri:DS.blu, linkedin:DS.org, iimjobs:DS.grn, wellfound:DS.pur,
   cutshort:'#4f46e5', instahyre:'#0891b2', foundit:'#db2777', indeed:'#1d4ed8',
-  glassdoor:'#0d9488', hirist:'#0369a1', remoteok:'#15803d', weworkremotely:'#475569',
-  ycombinator:'#ca8a04', weekday:'#7c3aed',
+  glassdoor:DS.acc, hirist:'#0369a1', remoteok:'#15803d', weworkremotely:DS.t2,
+  ycombinator:DS.amb, weekday:DS.pur,
 };
 
 const BUCKET_LABEL = { must_apply:'🔥 Must Apply', high:'⚡ High', medium:'👍 Medium', low:'💤 Low', '':'—' };
@@ -922,7 +1021,7 @@ function openConsole(label) {
   document.getElementById('log-console').classList.add('visible');
   document.getElementById('console-cmd').textContent = label;
   document.getElementById('console-status').textContent = '● RUNNING';
-  document.getElementById('console-status').style.color = '#2DD4C0';
+  document.getElementById('console-status').style.color = DS.logRunning;
   document.getElementById('log-lines').innerHTML = '';
 }
 
@@ -955,7 +1054,7 @@ function runAllScrapers() {
     if (msg.type === 'log') { appendLog(msg.line); const m = msg.line.match(/(\d+) new/); if (m) newJobs += parseInt(m[1]); }
     else if (msg.type === 'done') {
       document.getElementById('console-status').textContent = `● DONE (rc=${msg.returncode})`;
-      document.getElementById('console-status').style.color = msg.returncode === 0 ? '#34D399' : '#F87171';
+      document.getElementById('console-status').style.color = msg.returncode === 0 ? DS.logDoneOk : DS.logDoneErr;
       toast(`Scrape complete! ${newJobs} new jobs found`, 'success', 5000);
       if (STATE.currentScreen === 'dashboard') loadDashboard();
       if (STATE.currentScreen === 'jobs') loadJobs();
@@ -976,7 +1075,7 @@ function runCommand(cmd) {
     if (msg.type === 'log') appendLog(msg.line);
     else if (msg.type === 'done') {
       document.getElementById('console-status').textContent = '● DONE';
-      document.getElementById('console-status').style.color = '#34D399';
+      document.getElementById('console-status').style.color = DS.logDoneOk;
       toast(`${cmd} complete`, 'success');
       const refreshMap = { 'vc-jobs':()=>{if(STATE.currentScreen==='vc')loadVC()}, 'funding':()=>{if(STATE.currentScreen==='funding')loadFunding()}, 'recommend':()=>{if(STATE.currentScreen==='jobs')loadJobs()}, 'outreach-enrich':loadOutreach };
       if (refreshMap[cmd]) refreshMap[cmd]();
@@ -1010,13 +1109,13 @@ function statusChip(s) {
   return `<span class="chip ${cls[s]||'chip-low'}">${STATUS_LABEL[s]||s||'New'}</span>`;
 }
 function pltBadge(p) {
-  const c = PLT_COLORS[p] || '#6B7280';
+  const c = PLT_COLORS[p] || DS.neu;
   return `<span class="plt" style="color:${c};border-color:${c}44;background:${c}0F">${p}</span>`;
 }
 function scoreBar(score) {
   const pct = Math.min(100, score || 0);
-  const col = pct >= 80 ? '#059669' : pct >= 60 ? '#C97B00' : pct >= 40 ? '#D95C10' : '#D1D5DB';
-  return `<div class="score-bar"><div class="score-track"><div class="score-fill" style="width:${pct}%;background:${col}"></div></div><span style="font-size:10px;font-family:'JetBrains Mono',monospace;color:${pct>=40?col:'#9CA3AF'};width:24px;text-align:right">${score||0}</span></div>`;
+  const col = pct >= 80 ? DS.grn : pct >= 60 ? DS.amb : pct >= 40 ? DS.org : DS.unscored;
+  return `<div class="score-bar"><div class="score-track"><div class="score-fill" style="width:${pct}%;background:${col}"></div></div><span style="font-size:10px;font-family:'JetBrains Mono',monospace;color:${pct>=40?col:DS.t3};width:24px;text-align:right">${score||0}</span></div>`;
 }
 function countUp(el, target) {
   const dur = 600, start = performance.now();
@@ -1086,15 +1185,15 @@ function renderActionQueue(today) {
   const el = document.getElementById('action-queue');
   if (!today.actions?.length) { el.innerHTML = `<div class="empty"><div class="icon">✅</div><div class="title">All caught up!</div><div class="sub">No pending actions for today.</div></div>`; return; }
   const badgeColors = {
-    brand:  ['rgba(14,112,103,0.1)','#0E7067'],
-    amber:  ['rgba(201,123,0,0.1)', '#C97B00'],
-    green:  ['rgba(5,150,105,0.1)', '#059669'],
-    sky:    ['rgba(34,96,217,0.1)', '#2260D9'],
-    purple: ['rgba(124,58,237,0.1)','#7C3AED'],
+    brand:  [DS.accg,  DS.acc],
+    amber:  [DS.ambg,  DS.amb],
+    green:  [DS.grng,  DS.grn],
+    sky:    [DS.blug,  DS.blu],
+    purple: [DS.purg,  DS.pur],
   };
   const icons = { review_jobs:'💼', followup:'⏰', interview_prep:'🎯', outreach_review:'✉️', funded_leads:'📈' };
   el.innerHTML = today.actions.map(a => {
-    const [bg, col] = badgeColors[a.badge_color] || ['rgba(107,114,128,0.1)','#6B7280'];
+    const [bg, col] = badgeColors[a.badge_color] || [DS.neug, DS.neu];
     return `<div class="action-item fade-in" onclick="handleAction('${a.type}')">
       <div class="action-icon" style="background:${bg}">${icons[a.type]||'📌'}</div>
       <div style="flex:1">
@@ -1114,13 +1213,13 @@ function handleAction(type) {
 function renderDashFunnel(stats) {
   const j = stats.jobs; const apps = j.applications_by_status || {};
   const stages = [
-    { label:'Scraped',   val: j.total_jobs||0,  col:'#9CA3AF' },
-    { label:'Scored',    val: j.scored_jobs||0, col:'#2260D9' },
-    { label:'High+Must', val: (j.bucket_must_apply||0)+(j.bucket_high||0), col:'#0E7067' },
-    { label:'Applied',   val: apps.applied||0,  col:'#059669' },
-    { label:'Screening', val: apps.screening||0,col:'#D95C10' },
-    { label:'Interview', val: apps.interview||0,col:'#7C3AED' },
-    { label:'Offer',     val: apps.offer||0,    col:'#C97B00' },
+    { label:'Scraped',   val: j.total_jobs||0,  col: DS.unscored },
+    { label:'Scored',    val: j.scored_jobs||0, col: DS.blu },
+    { label:'High+Must', val: (j.bucket_must_apply||0)+(j.bucket_high||0), col: DS.acc },
+    { label:'Applied',   val: apps.applied||0,  col: DS.grn },
+    { label:'Screening', val: apps.screening||0,col: DS.org },
+    { label:'Interview', val: apps.interview||0,col: DS.pur },
+    { label:'Offer',     val: apps.offer||0,    col: DS.amb },
   ];
   const maxVal = stages[0].val || 1;
   document.getElementById('dash-funnel').innerHTML = stages.map(s => `
@@ -1140,7 +1239,7 @@ function renderDashSources(stats) {
   if (!sources.length) { document.getElementById('dash-sources').innerHTML = '<div style="color:var(--t3);font-size:12px;text-align:center;padding:12px">No data yet</div>'; return; }
   const max = Math.max(...sources.map(s => s.total), 1);
   document.getElementById('dash-sources').innerHTML = sources.map(s => {
-    const c = PLT_COLORS[s.platform] || '#6B7280';
+    const c = PLT_COLORS[s.platform] || DS.neu;
     return `<div style="display:flex;align-items:center;gap:8px;padding:4px 0">
       <span style="font-size:9px;font-family:'JetBrains Mono',monospace;font-weight:700;color:${c};width:80px;overflow:hidden;text-overflow:ellipsis">${s.platform}</span>
       <div style="flex:1;height:14px;background:var(--surf);border-radius:3px;overflow:hidden">
@@ -1164,9 +1263,9 @@ function renderDashRuns(runs) {
         return `<tr class="row-hover">
           <td style="font-family:'JetBrains Mono',monospace;color:var(--t3);font-size:11px">#${r.run_id}</td>
           <td style="font-size:12px;color:var(--t2)">${fmtDate(r.timestamp)} ${new Date(r.timestamp).toLocaleTimeString('en',{hour:'2-digit',minute:'2-digit'})}</td>
-          <td style="font-family:'JetBrains Mono',monospace;font-weight:600;color:${r.new_count>0?'#059669':'#9CA3AF'}">${r.new_count>0?'+':''}${r.new_count}</td>
+          <td style="font-family:'JetBrains Mono',monospace;font-weight:600;color:${r.new_count>0?DS.grn:DS.unscored}">${r.new_count>0?'+':''}${r.new_count}</td>
           <td style="font-size:11px;color:var(--t3)">${platforms}</td>
-          <td style="font-size:11px;color:${errCount>0?'#CC2828':'#9CA3AF'}">${errCount>0?errCount+' errors':'—'}</td>
+          <td style="font-size:11px;color:${errCount>0?DS.red:DS.unscored}">${errCount>0?errCount+' errors':'—'}</td>
         </tr>`;
       }).join('')}</tbody>
     </table>`;
@@ -1216,7 +1315,7 @@ function renderJobsTable(jobs) {
           <button class="btn-primary btn-sm" onclick="applyJob('${j.id}',this)">Apply</button>
           <button class="btn-ghost btn-sm" onclick="saveJob('${j.id}',this)">Save</button>
           ${viewBtn}
-          <button class="btn-ghost btn-sm" style="color:var(--red);border-color:rgba(204,40,40,0.25)" onclick="skipJob('${j.id}',this)">Skip</button>
+          <button class="btn-ghost btn-sm" style="color:var(--red);border-color:var(--redg)" onclick="skipJob('${j.id}',this)">Skip</button>
         </div>`;
     const skills = Array.isArray(j.skills) ? j.skills.slice(0,3).map(s => `<span style="font-size:9px;color:var(--t2);background:var(--card2);border:1px solid var(--br);padding:1px 5px;border-radius:4px">${s}</span>`).join('') : '';
     return `<tr class="${rowCls}" data-id="${j.id}" data-bucket="${j.priority_bucket||''}" data-apply-link="${(j.apply_link||'').replace(/"/g,'&quot;')}">
@@ -1227,7 +1326,7 @@ function renderJobsTable(jobs) {
       </td>
       <td>${pltBadge(j.platform)}</td>
       <td style="font-size:12px;color:var(--t2)">${j.location||'—'}</td>
-      <td style="font-size:12px;font-family:'JetBrains Mono',monospace;color:${j.salary?'#059669':'#9CA3AF'}">${j.salary||'—'}</td>
+      <td style="font-size:12px;font-family:'JetBrains Mono',monospace;color:${j.salary?DS.grn:DS.t3}">${j.salary||'—'}</td>
       <td>${scoreBar(j.priority_score)}</td>
       <td style="font-size:11px;color:var(--t3);font-family:'JetBrains Mono',monospace">${relTime(j.scraped_at)}</td>
       <td>${app ? statusChip(app.status) : bucketChip(j.priority_bucket)}</td>
@@ -1252,7 +1351,7 @@ async function applyJob(id, btn) {
     await POST(`/api/jobs/${id}/status`, { status:'applied' });
     toast('Marked as applied ✓','success');
     const row = document.querySelector(`tr[data-id="${id}"]`);
-    if (row) { row.className='applied'; row.cells[7].innerHTML='<span style="font-size:11px;color:#059669;font-weight:500">Applied ✓</span>'; row.cells[6].innerHTML=statusChip('applied'); }
+    if (row) { row.className='applied'; row.cells[7].innerHTML=`<span style="font-size:11px;color:${DS.grn};font-weight:500">Applied ✓</span>`; row.cells[6].innerHTML=statusChip('applied'); }
   } catch(e) { btn.disabled=false; btn.textContent='Apply'; toast('Error: '+e.message,'error'); }
 }
 
@@ -1288,7 +1387,7 @@ async function resetJobStatus(id, btn) {
         <button class="btn-primary btn-sm" onclick="applyJob('${id}',this)">Apply</button>
         <button class="btn-ghost btn-sm" onclick="saveJob('${id}',this)">Save</button>
         ${vBtn}
-        <button class="btn-ghost btn-sm" style="color:var(--red);border-color:rgba(204,40,40,0.25)" onclick="skipJob('${id}',this)">Skip</button>
+        <button class="btn-ghost btn-sm" style="color:var(--red);border-color:var(--redg)" onclick="skipJob('${id}',this)">Skip</button>
       </div>`;
     }
   } catch(e) { btn.disabled=false; btn.textContent='↩ Reset'; toast('Error: '+e.message,'error'); }
@@ -1299,12 +1398,12 @@ async function resetJobStatus(id, btn) {
 // ═══════════════════════════════════════════════════
 
 const COLUMNS = [
-  { status:'shortlisted', label:'Saved',     color:'#0E7067', dot:'rgba(14,112,103,0.1)'  },
-  { status:'applied',     label:'Applied',   color:'#059669', dot:'rgba(5,150,105,0.1)'   },
-  { status:'screening',   label:'Screening', color:'#D95C10', dot:'rgba(217,92,16,0.1)'   },
-  { status:'interview',   label:'Interview', color:'#7C3AED', dot:'rgba(124,58,237,0.1)'  },
-  { status:'offer',       label:'Offer 🎉',  color:'#C97B00', dot:'rgba(201,123,0,0.1)'   },
-  { status:'rejected',    label:'Rejected',  color:'#CC2828', dot:'rgba(204,40,40,0.1)'   },
+  { status:'shortlisted', label:'Saved',     color:DS.saved,    dot:DS.accg  },
+  { status:'applied',     label:'Applied',   color:DS.grn,      dot:DS.grng  },
+  { status:'screening',   label:'Screening', color:DS.org,      dot:DS.orgg  },
+  { status:'interview',   label:'Interview', color:DS.pur,      dot:DS.purg  },
+  { status:'offer',       label:'Offer 🎉',  color:DS.amb,      dot:DS.ambg  },
+  { status:'rejected',    label:'Rejected',  color:DS.red,      dot:DS.redg  },
 ];
 
 async function loadTracker() {
@@ -1319,7 +1418,7 @@ async function loadTracker() {
     board.innerHTML = COLUMNS.map(col => `
       <div class="kanban-col">
         <div class="kanban-header">
-          <div style="width:8px;height:8px;border-radius:50%;background:${col.color};flex-shrink:0;box-shadow:0 0 5px ${col.color}66"></div>
+          <div style="width:8px;height:8px;border-radius:50%;background:${col.color};flex-shrink:0;box-shadow:0 0 5px ${col.dot}"></div>
           <span style="font-size:11px;font-weight:600;color:var(--t2);text-transform:uppercase;letter-spacing:.05em">${col.label}</span>
           <span style="margin-left:auto;font-size:10px;font-family:'JetBrains Mono',monospace;background:${col.dot};color:${col.color};border:1px solid ${col.color}44;padding:1px 6px;border-radius:10px">${byStatus[col.status]?.length||0}</span>
         </div>
@@ -1339,7 +1438,7 @@ async function loadTracker() {
 function renderKanbanCard(app, colColor) {
   const job = app.job || {};
   const days = daysSince(app.applied_at || app.last_action_at);
-  const kc = colColor || '#0E7067';
+  const kc = colColor || DS.acc;
   return `<div class="kanban-card fade-in" style="--kc:${kc}" draggable="true"
     ondragstart="startDrag('${app.id}','${app.status}',this)"
     ondragend="endDrag(this)">
@@ -1347,7 +1446,7 @@ function renderKanbanCard(app, colColor) {
     <div style="font-size:11px;color:var(--t3);margin-top:3px">${job.company||app.company}</div>
     ${job.priority_score ? `<div style="margin-top:6px">${scoreBar(job.priority_score)}</div>` : ''}
     <div style="margin-top:8px;display:flex;align-items:center;justify-content:space-between">
-      ${days > 0 ? `<span style="font-size:10px;color:${days>7?'#D95C10':'#9CA3AF'};font-family:'JetBrains Mono',monospace">Day ${days}</span>` : '<span></span>'}
+      ${days > 0 ? `<span style="font-size:10px;color:${days>7?DS.org:DS.t3};font-family:'JetBrains Mono',monospace">Day ${days}</span>` : '<span></span>'}
       ${pltBadge(job.platform||'—')}
     </div>
   </div>`;
@@ -1383,11 +1482,11 @@ async function loadOutreach() {
 
 function renderOutreachStages(s) {
   const stages = [
-    { n:1, label:'Enrich', val:s.new||0, col:'#7C3AED' },
-    { n:2, label:'Draft',  val:s.emails_draft||0, col:'#2260D9' },
-    { n:3, label:'Review', val:s.emails_draft||0, col:'#0E7067', active:true },
-    { n:4, label:'Send',   val:s.emails_approved||0, col:'#059669' },
-    { n:5, label:'Track',  val:s.replied||0, col:'#6B7280' },
+    { n:1, label:'Enrich', val:s.new||0,           col:DS.pur },
+    { n:2, label:'Draft',  val:s.emails_draft||0,  col:DS.blu },
+    { n:3, label:'Review', val:s.emails_draft||0,  col:DS.acc, active:true },
+    { n:4, label:'Send',   val:s.emails_approved||0,col:DS.grn },
+    { n:5, label:'Track',  val:s.replied||0,       col:DS.neu },
   ];
   document.getElementById('outreach-stages').innerHTML = stages.map((st,i) => `
     <div style="display:flex;align-items:center;gap:8px">
@@ -1409,7 +1508,7 @@ function renderEmailList(emails) {
       <div style="padding:14px 16px;display:flex;align-items:flex-start;justify-content:space-between;gap:12px">
         <div style="flex:1">
           <div style="font-size:13px;font-weight:600;color:var(--t1)">${e.contact_name||'Unknown'} — <span style="color:var(--t2);font-weight:400">${e.contact_title||''}</span></div>
-          <div style="font-size:11px;color:var(--t3);margin-top:2px">${e.company} · ${e.contact_email||'No email'} <span style="color:${e.contact_email_status==='verified'?'#059669':'#C97B00'}">${e.contact_email_status==='verified'?'✓ verified':'⚠ unverified'}</span></div>
+          <div style="font-size:11px;color:var(--t3);margin-top:2px">${e.company} · ${e.contact_email||'No email'} <span style="color:${e.contact_email_status==='verified'?DS.grn:DS.amb}">${e.contact_email_status==='verified'?'✓ verified':'⚠ unverified'}</span></div>
           ${e.source_job_title ? `<div style="font-size:10px;color:var(--t3);margin-top:2px">Re: ${e.source_job_title}</div>` : ''}
         </div>
         <div style="display:flex;gap:6px;flex-shrink:0">
@@ -1464,27 +1563,28 @@ async function loadScrapers() {
     const ok = scrapers.filter(s=>s.health==='ok').length;
     const warn = scrapers.filter(s=>s.health==='warning').length;
     document.getElementById('scrapers-subtitle').textContent = `${scrapers.length} platforms · ${ok} healthy · ${warn} need attention`;
+    const healthCol = { ok:DS.grn, warning:DS.amb, blocked:DS.red };
     grid.innerHTML = scrapers.map(s => {
-      const healthCls = {ok:'health-ok',warning:'health-warning',blocked:'health-blocked'}[s.health]||'health-ok';
-      const healthCol = {ok:'#059669',warning:'#C97B00',blocked:'#CC2828'}[s.health]||'#059669';
+      const hCls = {ok:'health-ok',warning:'health-warning',blocked:'health-blocked'}[s.health]||'health-ok';
+      const hCol = healthCol[s.health] || DS.grn;
       return `<div class="scraper-card fade-in">
         <div style="display:flex;align-items:flex-start;justify-content:space-between;margin-bottom:10px">
           <div style="display:flex;align-items:center;gap:8px">
             <span style="font-size:18px">${s.icon}</span>
             <span style="font-size:13px;font-weight:600;color:var(--t1)">${s.label}</span>
           </div>
-          <div class="health-dot ${healthCls}"></div>
+          <div class="health-dot ${hCls}"></div>
         </div>
         <div style="font-size:22px;font-weight:700;font-family:'JetBrains Mono',monospace;color:${s.job_count>0?'var(--t1)':'var(--t3)'}">${s.job_count}</div>
         <div style="font-size:10px;color:var(--t3);margin-top:2px;margin-bottom:8px">${s.last_scraped?'Last: '+relTime(s.last_scraped):'Never run'}</div>
-        <div style="font-size:10px;margin-bottom:10px;color:${healthCol}">${s.health_msg||{ok:'Active',warning:'Action needed',blocked:'Blocked'}[s.health]||s.health}</div>
+        <div style="font-size:10px;margin-bottom:10px;color:${hCol}">${s.health_msg||{ok:'Active',warning:'Action needed',blocked:'Blocked'}[s.health]||s.health}</div>
         <button class="btn-ghost btn-sm" style="width:100%;font-size:11px;${s.cloudflare?'opacity:.4;cursor:not-allowed':''}"
           ${s.cloudflare?'disabled':`onclick="runSingleScraper('${s.name}',this)"`}>
           ${s.cloudflare?'Cloudflare Blocked':s.requires_login&&s.health!=='ok'?'🔑 Re-login & Run':'▶ Run now'}
         </button>
       </div>`;
     }).join('');
-    grid.innerHTML += `<div class="scraper-card" style="--sc-acc:var(--acc);border-color:rgba(14,112,103,0.2);background:rgba(14,112,103,0.03)">
+    grid.innerHTML += `<div class="scraper-card" style="--sc-acc:var(--acc);border-color:var(--accg-str);background:var(--accg)">
       <div style="font-size:13px;font-weight:700;color:var(--acc);margin-bottom:8px;font-family:'Syne',sans-serif">Auto-Schedule</div>
       <div style="font-size:11px;color:var(--t3);margin-bottom:4px">🕘 9:00 AM IST — daily</div>
       <div style="font-size:11px;color:var(--t3);margin-bottom:14px">🕓 4:00 PM IST — daily</div>
@@ -1520,16 +1620,17 @@ async function loadVC() {
     if (!registry?.length || registry[0]?.error) {
       regEl.innerHTML = '<div style="padding:20px;color:var(--t3);font-size:12px">No registry data</div>';
     } else {
-      const typeColor = {getro:'#2260D9',consider:'#7C3AED',custom:'#0E7067',pyjamahr:'#C97B00'};
-      regEl.innerHTML = registry.filter(v=>v.job_portal_url).map(v => `
-        <div style="padding:10px 14px;border-bottom:1px solid var(--br);display:flex;align-items:flex-start;justify-content:space-between;gap:8px">
+      const typeColor = { getro:DS.blu, consider:DS.pur, custom:DS.acc, pyjamahr:DS.amb };
+      regEl.innerHTML = registry.filter(v=>v.job_portal_url).map(v => {
+        const tc = typeColor[v.job_portal_type] || DS.neu;
+        return `<div style="padding:10px 14px;border-bottom:1px solid var(--br);display:flex;align-items:flex-start;justify-content:space-between;gap:8px">
           <div>
             <div style="font-size:12px;font-weight:500;color:var(--t1)">${v.name}</div>
             <div style="font-size:10px;color:var(--t3);margin-top:1px">${v.stage_focus||''} · ${v.location||''}</div>
           </div>
-          <span style="font-size:9px;padding:2px 6px;border-radius:4px;background:${(typeColor[v.job_portal_type]||'#6B7280')}15;color:${typeColor[v.job_portal_type]||'#6B7280'};border:1px solid ${(typeColor[v.job_portal_type]||'#6B7280')}40;font-family:'JetBrains Mono',monospace;font-weight:700;flex-shrink:0">${v.job_portal_type||'custom'}</span>
-        </div>
-      `).join('')||'<div style="padding:20px;color:var(--t3);font-size:12px">No portals with active URLs</div>';
+          <span style="font-size:9px;padding:2px 6px;border-radius:4px;background:${tc}15;color:${tc};border:1px solid ${tc}40;font-family:'JetBrains Mono',monospace;font-weight:700;flex-shrink:0">${v.job_portal_type||'custom'}</span>
+        </div>`;
+      }).join('')||'<div style="padding:20px;color:var(--t3);font-size:12px">No portals with active URLs</div>';
     }
     const jobsEl = document.getElementById('vc-jobs-table');
     if (!jobs.jobs?.length) {
@@ -1551,9 +1652,12 @@ async function loadFunding() {
     const data = await GET('/api/funding');
     document.getElementById('funding-subtitle').textContent = `${data.length} funded companies tracked`;
     if (!data?.length) { tbody.innerHTML='<tr><td colspan="8"><div class="empty"><div class="icon">📈</div><div class="title">No funding data yet</div><div class="sub">Click "Scan Funding News"</div></div></td></tr>'; return; }
-    const seriesColor = {'Seed':'#7C3AED','Pre-Series A':'#2260D9','Series A':'#0E7067','Series B':'#059669','Series C':'#C97B00','Series D':'#D95C10'};
+    const seriesColor = {
+      'Seed':DS.pur, 'Pre-Series A':DS.blu, 'Series A':DS.acc,
+      'Series B':DS.grn, 'Series C':DS.amb, 'Series D':DS.org
+    };
     tbody.innerHTML = data.map(row => {
-      const col = seriesColor[row.funding_series] || '#6B7280';
+      const col = seriesColor[row.funding_series] || DS.neu;
       const pmJobs = parseInt(row.pm_jobs_found||0);
       return `<tr class="row-hover">
         <td>
@@ -1561,10 +1665,10 @@ async function loadFunding() {
           ${row.linkedin_url?`<a href="${row.linkedin_url}" target="_blank" style="font-size:10px;color:var(--acc)">LinkedIn ↗</a>`:''}
         </td>
         <td><span class="chip" style="background:${col}15;color:${col};border:1px solid ${col}40">${row.funding_series||'—'}</span></td>
-        <td style="font-family:'JetBrains Mono',monospace;font-size:12px;color:#059669;font-weight:600">${row.funding_amount||'—'}</td>
+        <td style="font-family:'JetBrains Mono',monospace;font-size:12px;color:${DS.grn};font-weight:600">${row.funding_amount||'—'}</td>
         <td style="font-size:12px;color:var(--t2)">${row.sector||'—'}</td>
         <td style="font-size:12px;color:var(--t2)">${row.city||row.location||'—'}</td>
-        <td style="font-family:'JetBrains Mono',monospace;font-size:12px;color:${pmJobs>0?'#C97B00':'#9CA3AF'}">${pmJobs>0?pmJobs+' found':'—'}</td>
+        <td style="font-family:'JetBrains Mono',monospace;font-size:12px;color:${pmJobs>0?DS.amb:DS.unscored}">${pmJobs>0?pmJobs+' found':'—'}</td>
         <td style="font-size:11px;color:var(--t3);font-family:'JetBrains Mono',monospace">${row.funding_date?fmtDate(row.funding_date):'—'}</td>
         <td><button class="btn-primary btn-sm" onclick="toast('Draft outreach coming soon','info')">Draft Outreach</button></td>
       </tr>`;
@@ -1581,11 +1685,24 @@ async function loadAnalytics() {
   try {
     const data = await GET('/api/analytics');
     const f=data.funnel||{}, o=data.outreach||{}, cookies=data.cookies||{}, sources=data.sources||[];
+    const funnelStages = [
+      ['Scraped',    f.scraped||0,    DS.unscored],
+      ['Scored',     f.scored||0,     DS.blu],
+      ['Must Apply', f.must_apply||0, DS.pur],
+      ['High Prio',  f.high||0,       DS.amb],
+      ['Shortlisted',f.shortlisted||0,DS.acc],
+      ['Applied',    f.applied||0,    DS.grn],
+      ['Screening',  f.screening||0,  DS.org],
+      ['Interview',  f.interview||0,  DS.pur],
+      ['Offer',      f.offer||0,      DS.amb],
+    ];
+    const cookieCol = { active:DS.grn, expired:DS.amb, missing:DS.amb, cloudflare:DS.red };
+    const cookieLabel = { active:'Active ✓', expired:'Expired — re-login', missing:'Missing — login needed', cloudflare:'Cloudflare blocked' };
     el.innerHTML = `
       <div style="background:var(--card);border:1px solid var(--br);border-radius:12px;padding:20px;box-shadow:0 1px 3px rgba(0,0,0,0.05)">
         <div class="sec-label">Source Quality</div>
         ${sources.length ? sources.map(s => {
-          const c=PLT_COLORS[s.platform]||'#6B7280';
+          const c=PLT_COLORS[s.platform]||DS.neu;
           const pct=Math.max(2,(s.total/Math.max(...sources.map(x=>x.total||1),1))*100);
           return `<div style="margin-bottom:10px">
             <div style="display:flex;justify-content:space-between;margin-bottom:4px">
@@ -1599,7 +1716,7 @@ async function loadAnalytics() {
 
       <div style="background:var(--card);border:1px solid var(--br);border-radius:12px;padding:20px;box-shadow:0 1px 3px rgba(0,0,0,0.05)">
         <div class="sec-label">Conversion Funnel</div>
-        ${[['Scraped',f.scraped||0,'#9CA3AF'],['Scored',f.scored||0,'#2260D9'],['Must Apply',f.must_apply||0,'#7C3AED'],['High Priority',f.high||0,'#C97B00'],['Shortlisted',f.shortlisted||0,'#0E7067'],['Applied',f.applied||0,'#059669'],['Screening',f.screening||0,'#D95C10'],['Interview',f.interview||0,'#7C3AED'],['Offer',f.offer||0,'#C97B00']].map(([label,val,col])=>{
+        ${funnelStages.map(([label,val,col])=>{
           const pct=Math.max(1,val/(f.scraped||1)*100);
           return `<div style="display:flex;align-items:center;gap:10px;margin-bottom:6px">
             <span style="font-size:10px;color:var(--t3);font-family:'JetBrains Mono',monospace;width:80px;text-align:right">${label}</span>
@@ -1620,22 +1737,22 @@ async function loadAnalytics() {
             <div style="font-size:10px;color:var(--t3);text-transform:uppercase;letter-spacing:.06em">Sent</div>
           </div>
           <div style="text-align:center">
-            <div style="font-size:28px;font-weight:600;font-family:'JetBrains Mono',monospace;color:#059669;letter-spacing:-1px">${o.replied||0}</div>
+            <div style="font-size:28px;font-weight:600;font-family:'JetBrains Mono',monospace;color:${DS.grn};letter-spacing:-1px">${o.replied||0}</div>
             <div style="font-size:10px;color:var(--t3);text-transform:uppercase;letter-spacing:.06em">Replied</div>
           </div>
           <div style="text-align:center">
-            <div style="font-size:28px;font-weight:600;font-family:'JetBrains Mono',monospace;color:#0E7067;letter-spacing:-1px">${o.reply_rate||0}%</div>
+            <div style="font-size:28px;font-weight:600;font-family:'JetBrains Mono',monospace;color:${DS.acc};letter-spacing:-1px">${o.reply_rate||0}%</div>
             <div style="font-size:10px;color:var(--t3);text-transform:uppercase;letter-spacing:.06em">Reply Rate</div>
           </div>
         </div>
-        ${o.reply_rate>0?`<div style="font-size:11px;color:var(--t3);text-align:center">Industry avg: ~8% · You're at <span style="color:#059669;font-weight:600">${(o.reply_rate/8).toFixed(1)}×</span></div>`:''}
+        ${o.reply_rate>0?`<div style="font-size:11px;color:var(--t3);text-align:center">Industry avg: ~8% · You're at <span style="color:${DS.grn};font-weight:600">${(o.reply_rate/8).toFixed(1)}×</span></div>`:''}
       </div>
 
       <div style="background:var(--card);border:1px solid var(--br);border-radius:12px;padding:20px;box-shadow:0 1px 3px rgba(0,0,0,0.05)">
         <div class="sec-label">Session Health</div>
         ${Object.keys(cookies).length ? Object.entries(cookies).map(([name,status])=>{
-          const col={active:'#059669',expired:'#C97B00',missing:'#C97B00',cloudflare:'#CC2828'}[status]||'#6B7280';
-          const label={active:'Active ✓',expired:'Expired — re-login',missing:'Missing — login needed',cloudflare:'Cloudflare blocked'}[status]||status;
+          const col = cookieCol[status] || DS.neu;
+          const label = cookieLabel[status] || status;
           return `<div style="display:flex;align-items:center;justify-content:space-between;padding:6px 0;border-bottom:1px solid var(--br)">
             <span style="font-size:12px;color:var(--t2);font-family:'JetBrains Mono',monospace">${name}</span>
             <span class="chip" style="background:${col}12;color:${col};border-color:${col}40;font-size:9px">${label}</span>
