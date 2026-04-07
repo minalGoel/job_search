@@ -982,5 +982,27 @@ async def _full_run_async(
     typer.echo(f"{'═' * 60}\n")
 
 
+@app.command()
+def serve(
+    port: int = typer.Option(8000, "--port", "-p", help="Port to bind the dashboard server"),
+    host: str = typer.Option("127.0.0.1", "--host", "-h", help="Host to bind (use 0.0.0.0 for LAN access)"),
+    reload: bool = typer.Option(False, "--reload", help="Auto-reload on code changes (dev mode)"),
+) -> None:
+    """Start the web dashboard server at http://localhost:<port>"""
+    try:
+        import uvicorn
+    except ImportError:
+        typer.echo("uvicorn not installed. Run: pip install fastapi 'uvicorn[standard]'", err=True)
+        raise typer.Exit(1)
+    typer.echo(f"\n  PMHunt Dashboard → http://{host}:{port}\n")
+    uvicorn.run(
+        "api.server:app",
+        host=host,
+        port=port,
+        reload=reload,
+        log_level="info",
+    )
+
+
 if __name__ == "__main__":
     app()

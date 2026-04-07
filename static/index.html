@@ -1,0 +1,1422 @@
+<!DOCTYPE html>
+<html lang="en" class="dark">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1.0"/>
+<title>PMHunt — Job Search Dashboard</title>
+<link rel="preconnect" href="https://fonts.googleapis.com"/>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@300;400;500;600;700&display=swap" rel="stylesheet"/>
+<script src="https://cdn.tailwindcss.com"></script>
+<script>
+tailwind.config = {
+  darkMode: 'class',
+  theme: {
+    extend: {
+      fontFamily: { sans: ['IBM Plex Sans', 'sans-serif'], mono: ['IBM Plex Mono', 'monospace'] },
+      colors: {
+        bg:      '#0d1117',
+        surface: '#161b27',
+        card:    '#1c2235',
+        border:  '#252d42',
+        accent:  '#4f7cf6',
+        'accent-h':'#6b93ff',
+      }
+    }
+  }
+}
+</script>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+body{background:#0d1117;color:#e2e8f0;font-family:'IBM Plex Sans',sans-serif;height:100vh;overflow:hidden;display:flex}
+::-webkit-scrollbar{width:5px;height:5px}
+::-webkit-scrollbar-track{background:transparent}
+::-webkit-scrollbar-thumb{background:#2d3748;border-radius:3px}
+
+/* Sidebar */
+#sidebar{width:220px;flex-shrink:0;background:#0a0e18;border-right:1px solid #1e2538;display:flex;flex-direction:column;height:100vh;overflow-y:auto}
+.nav-item{display:flex;align-items:center;gap:10px;padding:9px 16px;font-size:13px;color:#8892a4;cursor:pointer;border-radius:6px;margin:1px 8px;transition:all .15s;white-space:nowrap}
+.nav-item:hover{background:#161b27;color:#c9d4e8}
+.nav-item.active{background:#1a2240;color:#4f7cf6;font-weight:500}
+.nav-item .badge{margin-left:auto;font-size:10px;padding:1px 6px;border-radius:10px;font-family:'IBM Plex Mono',monospace}
+
+/* Screens */
+#main{flex:1;overflow:hidden;display:flex;flex-direction:column}
+.screen{display:none;flex-direction:column;flex:1;overflow:hidden}
+.screen.active{display:flex}
+
+/* Topbar */
+.topbar{padding:14px 24px;border-bottom:1px solid #1e2538;display:flex;align-items:center;justify-content:space-between;flex-shrink:0;background:#0d1117}
+.topbar h1{font-size:15px;font-weight:600;color:#e2e8f0}
+.topbar p{font-size:12px;color:#64748b;margin-top:1px}
+
+/* Cards */
+.stat-card{background:#161b27;border:1px solid #1e2538;border-radius:10px;padding:16px}
+.stat-card .val{font-size:26px;font-weight:700;font-family:'IBM Plex Mono',monospace;color:#e2e8f0}
+.stat-card .lbl{font-size:11px;color:#64748b;text-transform:uppercase;letter-spacing:.05em;margin-bottom:6px}
+.stat-card .sub{font-size:11px;color:#64748b;margin-top:4px}
+
+/* Buttons */
+.btn-primary{background:#4f7cf6;color:#fff;border:none;padding:8px 16px;border-radius:7px;font-size:12px;font-weight:500;cursor:pointer;display:inline-flex;align-items:center;gap:6px;transition:background .15s}
+.btn-primary:hover{background:#6b93ff}
+.btn-primary:disabled{opacity:.5;cursor:not-allowed}
+.btn-ghost{background:transparent;color:#8892a4;border:1px solid #252d42;padding:7px 14px;border-radius:7px;font-size:12px;cursor:pointer;transition:all .15s}
+.btn-ghost:hover{border-color:#4f7cf6;color:#4f7cf6}
+.btn-sm{padding:5px 10px;font-size:11px;border-radius:5px}
+.btn-danger{background:transparent;color:#ef4444;border:1px solid #3d1515;padding:5px 10px;border-radius:5px;font-size:11px;cursor:pointer;transition:all .15s}
+.btn-danger:hover{background:#1f0a0a;border-color:#ef4444}
+.btn-success{background:transparent;color:#10b981;border:1px solid #0d2d1f;padding:5px 10px;border-radius:5px;font-size:11px;cursor:pointer;transition:all .15s}
+.btn-success:hover{background:#0a1f17;border-color:#10b981}
+
+/* Table */
+.data-table{width:100%;border-collapse:collapse;font-size:13px}
+.data-table th{text-align:left;padding:10px 14px;font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:.06em;color:#4a5568;border-bottom:1px solid #1e2538;background:#0d1117;position:sticky;top:0;z-index:2}
+.data-table td{padding:11px 14px;border-bottom:1px solid #131824;vertical-align:middle}
+.data-table tr.row-hover:hover td{background:#161b27}
+.data-table tr.applied td{background:#0a1a12}
+.data-table tr.shortlisted td{background:#0c1428}
+
+/* Inputs */
+.input{background:#161b27;border:1px solid #252d42;color:#e2e8f0;padding:7px 12px;border-radius:7px;font-size:13px;outline:none;font-family:'IBM Plex Sans',sans-serif}
+.input:focus{border-color:#4f7cf6}
+.select{background:#161b27;border:1px solid #252d42;color:#e2e8f0;padding:7px 12px;border-radius:7px;font-size:12px;outline:none;cursor:pointer}
+.select:focus{border-color:#4f7cf6}
+
+/* Tags/chips */
+.chip{display:inline-flex;align-items:center;padding:2px 8px;border-radius:20px;font-size:10px;font-weight:600;font-family:'IBM Plex Mono',monospace}
+.chip-must{background:#1a0a2e;color:#a78bfa;border:1px solid #3d2060}
+.chip-high{background:#0a1f35;color:#4f7cf6;border:1px solid #1a3a6b}
+.chip-medium{background:#1a1500;color:#f59e0b;border:1px solid #3d3000}
+.chip-low{background:#111827;color:#6b7280;border:1px solid #1f2937}
+.chip-applied{background:#0a1f17;color:#10b981;border:1px solid #0d3022}
+.chip-shortlisted{background:#0c1428;color:#60a5fa;border:1px solid #1a2e56}
+.chip-screening{background:#1a100a;color:#f97316;border:1px solid #3d2010}
+.chip-interview{background:#150a1a;color:#c084fc;border:1px solid #3d1560}
+.chip-ok{background:#0a1f17;color:#10b981;border:1px solid #0d3022}
+.chip-warning{background:#1a1000;color:#f59e0b;border:1px solid #3d2800}
+.chip-blocked{background:#1a0a0a;color:#ef4444;border:1px solid #3d1010}
+
+/* Score bar */
+.score-bar{display:flex;align-items:center;gap:6px}
+.score-track{flex:1;height:3px;background:#1e2538;border-radius:2px;overflow:hidden}
+.score-fill{height:100%;border-radius:2px;transition:width .3s}
+
+/* Platform badge */
+.plt{font-size:9px;padding:2px 7px;border-radius:3px;font-weight:700;text-transform:uppercase;letter-spacing:.04em;font-family:'IBM Plex Mono',monospace;border:1px solid}
+
+/* Kanban */
+.kanban-col{flex-shrink:0;width:240px}
+.kanban-header{display:flex;align-items:center;gap:8px;margin-bottom:10px;padding:0 4px}
+.kanban-card{background:#161b27;border:1px solid #1e2538;border-radius:8px;padding:12px;margin-bottom:8px;cursor:grab}
+.kanban-card:active{cursor:grabbing}
+.kanban-card.drag-over{border-color:#4f7cf6;background:#0c1428}
+.kanban-drop{min-height:200px;border-radius:8px;padding:4px;transition:background .15s}
+.kanban-drop.drag-target{background:#0c1020}
+
+/* Outreach email card */
+.email-card{background:#161b27;border:1px solid #1e2538;border-radius:10px;overflow:hidden;transition:all .2s}
+.email-card.fading{opacity:0;transform:translateX(20px)}
+.email-body{font-size:12px;line-height:1.6;color:#8892a4;background:#0d1117;padding:12px;border-radius:6px;font-family:'IBM Plex Mono',monospace;max-height:140px;overflow:hidden;position:relative}
+.email-body.expanded{max-height:none}
+.email-body::after{content:'';position:absolute;bottom:0;left:0;right:0;height:24px;background:linear-gradient(transparent,#0d1117);pointer-events:none}
+.email-body.expanded::after{display:none}
+
+/* Scraper card */
+.scraper-card{background:#161b27;border:1px solid #1e2538;border-radius:10px;padding:16px;transition:all .15s;position:relative}
+.scraper-card:hover{border-color:#2d3748;transform:translateY(-1px)}
+.health-dot{width:8px;height:8px;border-radius:50%;flex-shrink:0}
+.health-ok{background:#10b981}
+.health-warning{background:#f59e0b}
+.health-blocked{background:#ef4444}
+
+/* Log console */
+#log-console{position:fixed;bottom:0;left:220px;right:0;z-index:100;background:#080d16;border-top:2px solid #4f7cf6;transform:translateY(100%);transition:transform .3s cubic-bezier(.4,0,.2,1)}
+#log-console.visible{transform:none}
+#log-lines{height:200px;overflow-y:auto;padding:10px 16px;font-family:'IBM Plex Mono',monospace;font-size:11px;line-height:1.7}
+.log-line{color:#64748b}
+.log-line.info{color:#60a5fa}
+.log-line.success{color:#10b981}
+.log-line.warn{color:#f59e0b}
+.log-line.error{color:#ef4444}
+
+/* Toast */
+#toast-container{position:fixed;top:20px;right:20px;z-index:9999;display:flex;flex-direction:column;gap:8px;pointer-events:none}
+.toast{background:#1c2235;border:1px solid #252d42;border-radius:8px;padding:10px 16px;font-size:13px;color:#e2e8f0;box-shadow:0 8px 24px rgba(0,0,0,.4);transform:translateX(120%);transition:transform .3s;pointer-events:auto;display:flex;align-items:center;gap:10px;max-width:320px}
+.toast.show{transform:none}
+.toast.success{border-left:3px solid #10b981}
+.toast.error{border-left:3px solid #ef4444}
+.toast.info{border-left:3px solid #4f7cf6}
+
+/* Progress bar */
+.pbar{height:4px;background:#1e2538;border-radius:2px;overflow:hidden}
+.pbar-fill{height:100%;border-radius:2px;transition:width .4s ease}
+
+/* Action item */
+.action-item{display:flex;align-items:flex-start;gap:12px;padding:12px 16px;border-bottom:1px solid #131824;cursor:pointer;transition:background .1s}
+.action-item:hover{background:#161b27}
+.action-icon{width:32px;height:32px;border-radius:8px;display:flex;align-items:center;justify-content:center;flex-shrink:0;font-size:14px}
+
+/* Loading skeleton */
+.skeleton{background:linear-gradient(90deg,#161b27 25%,#1c2235 50%,#161b27 75%);background-size:200% 100%;animation:shimmer 1.4s infinite;border-radius:4px}
+@keyframes shimmer{0%{background-position:200% 0}100%{background-position:-200% 0}}
+
+/* Funnel bar */
+.funnel-row{display:flex;align-items:center;gap:10px;padding:4px 0}
+.funnel-label{font-size:11px;color:#64748b;width:90px;text-align:right;font-family:'IBM Plex Mono',monospace}
+.funnel-bar{flex:1;height:20px;background:#0d1117;border-radius:3px;overflow:hidden;position:relative}
+.funnel-fill{height:100%;border-radius:3px;transition:width .5s ease;display:flex;align-items:center;padding-left:8px}
+.funnel-count{font-size:10px;font-family:'IBM Plex Mono',monospace;font-weight:600}
+
+/* Divider */
+.divider{height:1px;background:#1e2538;margin:0}
+
+/* Empty state */
+.empty{text-align:center;padding:60px 20px;color:#4a5568}
+.empty .icon{font-size:36px;margin-bottom:12px}
+.empty .title{font-size:14px;font-weight:500;color:#64748b;margin-bottom:6px}
+.empty .sub{font-size:12px;color:#374151}
+
+/* Inline edit */
+.edit-area{width:100%;background:#0d1117;border:1px solid #252d42;color:#e2e8f0;padding:10px;border-radius:6px;font-family:'IBM Plex Mono',monospace;font-size:11px;line-height:1.6;resize:vertical;min-height:80px;outline:none}
+.edit-area:focus{border-color:#4f7cf6}
+
+@keyframes fadeIn{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:none}}
+.fade-in{animation:fadeIn .2s ease}
+</style>
+</head>
+<body>
+
+<!-- ── Sidebar ─────────────────────────────────────────────────────────── -->
+<aside id="sidebar">
+  <div style="padding:16px 16px 12px;border-bottom:1px solid #1e2538">
+    <div style="display:flex;align-items:center;gap:10px">
+      <div style="width:28px;height:28px;background:#4f7cf6;border-radius:7px;display:flex;align-items:center;justify-content:center;font-size:13px">⚡</div>
+      <div>
+        <div style="font-size:13px;font-weight:700;color:#e2e8f0">PMHunt</div>
+        <div style="font-size:10px;color:#4a5568;font-family:'IBM Plex Mono',monospace">Delhi NCR · 40+ LPA</div>
+      </div>
+    </div>
+  </div>
+  <nav style="padding:10px 0;flex:1">
+    <div style="padding:4px 16px 6px;font-size:9px;font-weight:700;color:#374151;letter-spacing:.1em;text-transform:uppercase;font-family:'IBM Plex Mono',monospace">Main</div>
+    <div class="nav-item active" data-screen="dashboard" onclick="navigate('dashboard')">
+      <span>📊</span> Dashboard
+      <span class="badge" id="badge-dashboard" style="background:#1a2240;color:#4f7cf6"></span>
+    </div>
+    <div class="nav-item" data-screen="jobs" onclick="navigate('jobs')">
+      <span>💼</span> All Jobs
+      <span class="badge" id="badge-jobs" style="background:#161b27;color:#64748b"></span>
+    </div>
+    <div class="nav-item" data-screen="tracker" onclick="navigate('tracker')">
+      <span>📋</span> Tracker
+      <span class="badge" id="badge-tracker" style="background:#161b27;color:#64748b"></span>
+    </div>
+    <div class="nav-item" data-screen="outreach" onclick="navigate('outreach')">
+      <span>✉️</span> Outreach
+      <span class="badge" id="badge-outreach" style="background:#0a1f17;color:#10b981"></span>
+    </div>
+    <div style="padding:10px 16px 6px;font-size:9px;font-weight:700;color:#374151;letter-spacing:.1em;text-transform:uppercase;font-family:'IBM Plex Mono',monospace;margin-top:6px">Sources</div>
+    <div class="nav-item" data-screen="scrapers" onclick="navigate('scrapers')">
+      <span>⚙️</span> Scrapers
+    </div>
+    <div class="nav-item" data-screen="vc" onclick="navigate('vc')">
+      <span>🏦</span> VC Portals
+    </div>
+    <div class="nav-item" data-screen="funding" onclick="navigate('funding')">
+      <span>📈</span> Funded Cos
+    </div>
+    <div style="padding:10px 16px 6px;font-size:9px;font-weight:700;color:#374151;letter-spacing:.1em;text-transform:uppercase;font-family:'IBM Plex Mono',monospace;margin-top:6px">Insights</div>
+    <div class="nav-item" data-screen="analytics" onclick="navigate('analytics')">
+      <span>🔬</span> Analytics
+    </div>
+  </nav>
+  <div style="padding:12px 16px;border-top:1px solid #1e2538">
+    <div style="display:flex;align-items:center;gap:8px">
+      <div style="width:28px;height:28px;border-radius:50%;background:linear-gradient(135deg,#4f7cf6,#a78bfa);display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:700;color:#fff">MG</div>
+      <div>
+        <div style="font-size:12px;font-weight:600;color:#c9d4e8">Minal Goel</div>
+        <div style="font-size:10px;color:#4a5568">Sr. PM · 6 yrs</div>
+      </div>
+    </div>
+  </div>
+</aside>
+
+<!-- ── Main ───────────────────────────────────────────────────────────── -->
+<div id="main">
+
+<!-- ══════════════════════ DASHBOARD ══════════════════════════════════════ -->
+<div id="screen-dashboard" class="screen active">
+  <div class="topbar">
+    <div>
+      <h1 id="dash-greeting">Good morning, Minal 👋</h1>
+      <p id="dash-subtitle">Loading...</p>
+    </div>
+    <div style="display:flex;gap:8px">
+      <button class="btn-primary" onclick="runAllScrapers()">
+        <svg width="13" height="13" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8 8 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/></svg>
+        Run All Scrapers
+      </button>
+      <button class="btn-ghost" onclick="navigate('tracker')">View Pipeline →</button>
+    </div>
+  </div>
+  <div id="dash-content" style="flex:1;overflow-y:auto;padding:20px 24px">
+    <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:20px" id="stat-cards">
+      <div class="stat-card skeleton" style="height:80px"></div>
+      <div class="stat-card skeleton" style="height:80px"></div>
+      <div class="stat-card skeleton" style="height:80px"></div>
+      <div class="stat-card skeleton" style="height:80px"></div>
+    </div>
+    <div style="display:grid;grid-template-columns:1fr 380px;gap:16px">
+      <div>
+        <div style="font-size:12px;font-weight:600;color:#64748b;text-transform:uppercase;letter-spacing:.06em;margin-bottom:10px;font-family:'IBM Plex Mono',monospace">Today's Action Queue</div>
+        <div id="action-queue" style="background:#161b27;border:1px solid #1e2538;border-radius:10px;overflow:hidden">
+          <div style="padding:40px;text-align:center;color:#4a5568;font-size:12px">Loading...</div>
+        </div>
+      </div>
+      <div style="display:flex;flex-direction:column;gap:14px">
+        <div>
+          <div style="font-size:12px;font-weight:600;color:#64748b;text-transform:uppercase;letter-spacing:.06em;margin-bottom:10px;font-family:'IBM Plex Mono',monospace">Application Funnel</div>
+          <div id="dash-funnel" style="background:#161b27;border:1px solid #1e2538;border-radius:10px;padding:16px">
+            <div style="color:#4a5568;font-size:12px;text-align:center;padding:20px">Loading...</div>
+          </div>
+        </div>
+        <div>
+          <div style="font-size:12px;font-weight:600;color:#64748b;text-transform:uppercase;letter-spacing:.06em;margin-bottom:10px;font-family:'IBM Plex Mono',monospace">Top Sources</div>
+          <div id="dash-sources" style="background:#161b27;border:1px solid #1e2538;border-radius:10px;padding:16px">
+            <div style="color:#4a5568;font-size:12px;text-align:center;padding:20px">Loading...</div>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div style="margin-top:16px">
+      <div style="font-size:12px;font-weight:600;color:#64748b;text-transform:uppercase;letter-spacing:.06em;margin-bottom:10px;font-family:'IBM Plex Mono',monospace">Recent Runs</div>
+      <div id="dash-runs" style="background:#161b27;border:1px solid #1e2538;border-radius:10px;overflow:hidden"></div>
+    </div>
+  </div>
+</div>
+
+<!-- ══════════════════════ ALL JOBS ════════════════════════════════════════ -->
+<div id="screen-jobs" class="screen">
+  <div class="topbar" style="gap:12px;flex-wrap:wrap">
+    <h1 style="margin-right:8px">All Jobs</h1>
+    <input id="job-search" type="text" class="input" placeholder="Search title, company..." style="width:220px" oninput="debouncedJobSearch()" />
+    <select id="job-platform" class="select" onchange="loadJobs()">
+      <option value="">All Platforms</option>
+      <option value="naukri">Naukri</option>
+      <option value="linkedin">LinkedIn</option>
+      <option value="iimjobs">IIMJobs</option>
+      <option value="instahyre">Instahyre</option>
+      <option value="cutshort">Cutshort</option>
+      <option value="hirist">Hirist</option>
+      <option value="foundit">Foundit</option>
+      <option value="wellfound">Wellfound</option>
+      <option value="ycombinator">YCombinator</option>
+      <option value="weekday">Weekday</option>
+      <option value="remoteok">RemoteOK</option>
+      <option value="weworkremotely">WeWorkRemotely</option>
+    </select>
+    <select id="job-bucket" class="select" onchange="loadJobs()">
+      <option value="">All Buckets</option>
+      <option value="must_apply">🔥 Must Apply</option>
+      <option value="high">⚡ High</option>
+      <option value="medium">👍 Medium</option>
+      <option value="low">💤 Low</option>
+    </select>
+    <select id="job-sort" class="select" onchange="loadJobs()">
+      <option value="relevance">Sort: Relevance</option>
+      <option value="date">Sort: Date</option>
+      <option value="salary">Sort: Salary</option>
+      <option value="company">Sort: Company</option>
+    </select>
+    <span id="job-count" style="font-size:12px;color:#4a5568;font-family:'IBM Plex Mono',monospace;margin-left:auto"></span>
+  </div>
+  <div style="flex:1;overflow-y:auto">
+    <table class="data-table">
+      <thead><tr>
+        <th>Role & Company</th>
+        <th>Platform</th>
+        <th>Location</th>
+        <th>Salary</th>
+        <th>Score</th>
+        <th>Posted</th>
+        <th>Status</th>
+        <th>Actions</th>
+      </tr></thead>
+      <tbody id="jobs-tbody">
+        <tr><td colspan="8" style="text-align:center;padding:40px;color:#4a5568">Loading...</td></tr>
+      </tbody>
+    </table>
+    <div id="jobs-pagination" style="padding:12px 16px;text-align:center;border-top:1px solid #1e2538"></div>
+  </div>
+</div>
+
+<!-- ══════════════════════ TRACKER (KANBAN) ════════════════════════════════ -->
+<div id="screen-tracker" class="screen">
+  <div class="topbar">
+    <div>
+      <h1>Application Tracker</h1>
+      <p id="tracker-subtitle">Loading applications...</p>
+    </div>
+    <div style="display:flex;gap:8px">
+      <button class="btn-ghost btn-sm" onclick="loadTracker()">↺ Refresh</button>
+    </div>
+  </div>
+  <div id="kanban-board" style="flex:1;overflow-x:auto;padding:20px;display:flex;gap:14px;align-items:flex-start">
+    <div style="color:#4a5568;font-size:13px;padding:40px">Loading...</div>
+  </div>
+</div>
+
+<!-- ══════════════════════ OUTREACH ════════════════════════════════════════ -->
+<div id="screen-outreach" class="screen">
+  <div class="topbar">
+    <div>
+      <h1>Outreach Pipeline</h1>
+      <p id="outreach-subtitle">Loading...</p>
+    </div>
+    <div style="display:flex;gap:8px">
+      <button class="btn-ghost btn-sm" onclick="runCommand('outreach-enrich')">Enrich Contacts</button>
+      <button class="btn-primary btn-sm" onclick="runCommand('outreach-send')">Send Approved</button>
+    </div>
+  </div>
+  <!-- Pipeline stages -->
+  <div id="outreach-stages" style="padding:12px 24px;background:#0a0e18;border-bottom:1px solid #1e2538;flex-shrink:0;display:flex;align-items:center;gap:8px;flex-wrap:wrap"></div>
+  <div style="flex:1;overflow-y:auto">
+    <div style="padding:16px 24px;display:flex;align-items:center;justify-content:space-between">
+      <div style="font-size:12px;font-weight:600;color:#64748b;text-transform:uppercase;letter-spacing:.06em;font-family:'IBM Plex Mono',monospace">Review Queue — Draft Emails</div>
+      <select class="select" id="outreach-filter" onchange="loadOutreach()" style="font-size:11px;padding:5px 10px">
+        <option value="draft">Pending Review</option>
+        <option value="approved">Approved</option>
+        <option value="sent">Sent</option>
+        <option value="">All</option>
+      </select>
+    </div>
+    <div id="email-list" style="padding:0 24px 24px;display:flex;flex-direction:column;gap:12px;max-width:800px"></div>
+  </div>
+</div>
+
+<!-- ══════════════════════ SCRAPERS ════════════════════════════════════════ -->
+<div id="screen-scrapers" class="screen">
+  <div class="topbar">
+    <div><h1>Scraper Control</h1><p id="scrapers-subtitle">14 platforms registered</p></div>
+    <div style="display:flex;gap:8px">
+      <button class="btn-ghost btn-sm" onclick="runCommand('vc-jobs')">Run VC Jobs</button>
+      <button class="btn-ghost btn-sm" onclick="runCommand('mnc-jobs')">Run MNC Jobs</button>
+      <button class="btn-primary" onclick="runAllScrapers()">
+        <svg width="13" height="13" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8 8 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/></svg>
+        Run All
+      </button>
+    </div>
+  </div>
+  <div id="scrapers-grid" style="flex:1;overflow-y:auto;padding:20px 24px;display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:12px;align-content:start">
+    <div style="color:#4a5568;font-size:13px;grid-column:1/-1">Loading...</div>
+  </div>
+</div>
+
+<!-- ══════════════════════ VC PORTALS ══════════════════════════════════════ -->
+<div id="screen-vc" class="screen">
+  <div class="topbar">
+    <div>
+      <h1>VC Portfolio Boards</h1>
+      <p id="vc-subtitle">Loading...</p>
+    </div>
+    <button class="btn-primary btn-sm" onclick="runCommand('vc-jobs')">
+      <svg width="13" height="13" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8 8 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/></svg>
+      Scrape VC Jobs
+    </button>
+  </div>
+  <div style="flex:1;overflow-y:auto;padding:20px 24px;display:grid;grid-template-columns:340px 1fr;gap:16px">
+    <div>
+      <div style="font-size:11px;font-weight:600;color:#64748b;text-transform:uppercase;letter-spacing:.06em;margin-bottom:10px;font-family:'IBM Plex Mono',monospace">VC Registry</div>
+      <div id="vc-registry" style="background:#161b27;border:1px solid #1e2538;border-radius:10px;overflow:hidden;font-size:12px"></div>
+    </div>
+    <div>
+      <div style="font-size:11px;font-weight:600;color:#64748b;text-transform:uppercase;letter-spacing:.06em;margin-bottom:10px;font-family:'IBM Plex Mono',monospace">Portfolio PM Jobs</div>
+      <div id="vc-jobs-table" style="background:#161b27;border:1px solid #1e2538;border-radius:10px;overflow:hidden"></div>
+    </div>
+  </div>
+</div>
+
+<!-- ══════════════════════ FUNDED COS ══════════════════════════════════════ -->
+<div id="screen-funding" class="screen">
+  <div class="topbar">
+    <div><h1>Recently Funded Startups</h1><p id="funding-subtitle">Tracking from Inc42, YourStory, Entrackr</p></div>
+    <button class="btn-primary btn-sm" onclick="runCommand('funding')">Scan Funding News</button>
+  </div>
+  <div style="flex:1;overflow-y:auto">
+    <table class="data-table">
+      <thead><tr>
+        <th>Company</th>
+        <th>Round</th>
+        <th>Amount</th>
+        <th>Sector</th>
+        <th>City</th>
+        <th>PM Jobs Found</th>
+        <th>Funded</th>
+        <th>Action</th>
+      </tr></thead>
+      <tbody id="funding-tbody">
+        <tr><td colspan="8" style="text-align:center;padding:40px;color:#4a5568">Loading...</td></tr>
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<!-- ══════════════════════ ANALYTICS ════════════════════════════════════════ -->
+<div id="screen-analytics" class="screen">
+  <div class="topbar">
+    <h1>Analytics</h1>
+    <button class="btn-ghost btn-sm" onclick="loadAnalytics()">↺ Refresh</button>
+  </div>
+  <div id="analytics-content" style="flex:1;overflow-y:auto;padding:20px 24px;display:grid;grid-template-columns:1fr 1fr;gap:16px;align-content:start">
+    <div style="color:#4a5568;font-size:13px;grid-column:1/-1">Loading...</div>
+  </div>
+</div>
+
+</div><!-- #main -->
+
+<!-- ── Log Console ──────────────────────────────────────────────────────── -->
+<div id="log-console">
+  <div style="display:flex;align-items:center;justify-content:space-between;padding:8px 16px;border-bottom:1px solid #1e2538;background:#0d1117">
+    <div style="display:flex;align-items:center;gap:10px">
+      <span id="console-status" style="font-size:11px;font-family:'IBM Plex Mono',monospace;color:#4f7cf6">● RUNNING</span>
+      <span id="console-cmd" style="font-size:11px;color:#4a5568;font-family:'IBM Plex Mono',monospace"></span>
+    </div>
+    <div style="display:flex;align-items:center;gap:10px">
+      <div id="console-progress" style="width:160px"></div>
+      <button onclick="closeConsole()" style="background:none;border:none;color:#4a5568;cursor:pointer;font-size:14px;padding:0 4px">✕</button>
+    </div>
+  </div>
+  <div id="log-lines"></div>
+</div>
+
+<!-- ── Toast Container ───────────────────────────────────────────────────── -->
+<div id="toast-container"></div>
+
+<script>
+// ═══════════════════════════════════════════════════════════════════════════
+// STATE & CONSTANTS
+// ═══════════════════════════════════════════════════════════════════════════
+
+const STATE = {
+  currentScreen: 'dashboard',
+  jobs: { page: 1, total: 0, pages: 1 },
+  stats: null,
+  scrapeWs: null,
+  cmdWs: null,
+  jobSearchTimer: null,
+  dragJobId: null,
+  dragStatus: null,
+};
+
+const PLT_COLORS = {
+  naukri:'#2563eb', linkedin:'#ea580c', iimjobs:'#16a34a', wellfound:'#7c3aed',
+  cutshort:'#4f46e5', instahyre:'#0891b2', foundit:'#db2777', indeed:'#1d4ed8',
+  glassdoor:'#0d9488', hirist:'#0369a1', remoteok:'#15803d', weworkremotely:'#475569',
+  ycombinator:'#ca8a04', weekday:'#7c3aed',
+};
+
+const BUCKET_LABEL = { must_apply:'🔥 Must Apply', high:'⚡ High', medium:'👍 Medium', low:'💤 Low', '':'—' };
+const STATUS_LABEL = { shortlisted:'Saved', applied:'Applied', screening:'Screening', interview:'Interview', offer:'Offer 🎉', rejected:'Rejected', skipped:'Skipped' };
+
+// ═══════════════════════════════════════════════════════════════════════════
+// API HELPERS
+// ═══════════════════════════════════════════════════════════════════════════
+
+async function api(method, path, body) {
+  try {
+    const opts = { method, headers: {'Content-Type':'application/json'} };
+    if (body) opts.body = JSON.stringify(body);
+    const res = await fetch(path, opts);
+    if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
+    return await res.json();
+  } catch (e) {
+    console.error(`API ${method} ${path}:`, e);
+    throw e;
+  }
+}
+
+const GET = path => api('GET', path);
+const POST = (path, body) => api('POST', path, body);
+const DEL = path => api('DELETE', path);
+
+// ═══════════════════════════════════════════════════════════════════════════
+// TOAST
+// ═══════════════════════════════════════════════════════════════════════════
+
+function toast(msg, type = 'info', duration = 3500) {
+  const c = document.getElementById('toast-container');
+  const el = document.createElement('div');
+  el.className = `toast ${type}`;
+  el.innerHTML = `<span style="font-size:14px">${type==='success'?'✓':type==='error'?'✕':'ℹ'}</span><span>${msg}</span>`;
+  c.appendChild(el);
+  requestAnimationFrame(() => el.classList.add('show'));
+  setTimeout(() => {
+    el.classList.remove('show');
+    setTimeout(() => el.remove(), 300);
+  }, duration);
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// NAVIGATION
+// ═══════════════════════════════════════════════════════════════════════════
+
+function navigate(screen) {
+  document.querySelectorAll('.screen').forEach(s => s.classList.remove('active'));
+  document.querySelectorAll('.nav-item').forEach(n => n.classList.remove('active'));
+  document.getElementById(`screen-${screen}`).classList.add('active');
+  document.querySelector(`[data-screen="${screen}"]`).classList.add('active');
+  STATE.currentScreen = screen;
+  const loaders = {
+    dashboard: loadDashboard,
+    jobs: loadJobs,
+    tracker: loadTracker,
+    outreach: loadOutreach,
+    scrapers: loadScrapers,
+    vc: loadVC,
+    funding: loadFunding,
+    analytics: loadAnalytics,
+  };
+  if (loaders[screen]) loaders[screen]();
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// WEBSOCKET + CONSOLE
+// ═══════════════════════════════════════════════════════════════════════════
+
+function openConsole(label) {
+  const el = document.getElementById('log-console');
+  el.classList.add('visible');
+  document.getElementById('console-cmd').textContent = label;
+  document.getElementById('console-status').textContent = '● RUNNING';
+  document.getElementById('log-lines').innerHTML = '';
+}
+
+function closeConsole() {
+  document.getElementById('log-console').classList.remove('visible');
+}
+
+function appendLog(line) {
+  const el = document.getElementById('log-lines');
+  const div = document.createElement('div');
+  div.className = 'log-line';
+  if (line.includes('error') || line.includes('ERROR') || line.includes('fail')) div.className += ' error';
+  else if (line.includes('warn') || line.includes('WARN')) div.className += ' warn';
+  else if (line.includes('✓') || line.includes('new') || line.includes('done') || line.includes('success')) div.className += ' success';
+  else if (line.includes(':') || line.startsWith('[')) div.className += ' info';
+  div.textContent = line || ' ';
+  el.appendChild(div);
+  el.scrollTop = el.scrollHeight;
+}
+
+function runAllScrapers() {
+  if (STATE.scrapeWs && STATE.scrapeWs.readyState === WebSocket.OPEN) {
+    toast('Scraper already running', 'info'); return;
+  }
+  openConsole('run (all platforms)');
+  const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+  const ws = new WebSocket(`${proto}//${location.host}/ws/scrape`);
+  STATE.scrapeWs = ws;
+  let newJobs = 0;
+  ws.onmessage = e => {
+    const msg = JSON.parse(e.data);
+    if (msg.type === 'log') {
+      appendLog(msg.line);
+      const m = msg.line.match(/(\d+) new/);
+      if (m) newJobs += parseInt(m[1]);
+    } else if (msg.type === 'done') {
+      document.getElementById('console-status').textContent = `● DONE (rc=${msg.returncode})`;
+      document.getElementById('console-status').style.color = msg.returncode === 0 ? '#10b981' : '#ef4444';
+      toast(`Scrape complete! ${newJobs} new jobs found`, 'success', 5000);
+      if (STATE.currentScreen === 'dashboard') loadDashboard();
+      if (STATE.currentScreen === 'jobs') loadJobs();
+    } else if (msg.type === 'error') {
+      appendLog('ERROR: ' + msg.msg);
+    }
+  };
+  ws.onerror = () => toast('WebSocket error — check server', 'error');
+  ws.onclose = () => { STATE.scrapeWs = null; };
+}
+
+function runCommand(cmd) {
+  if (STATE.cmdWs && STATE.cmdWs.readyState === WebSocket.OPEN) {
+    toast(`${cmd} already running`, 'info'); return;
+  }
+  openConsole(cmd);
+  const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+  const ws = new WebSocket(`${proto}//${location.host}/ws/command?cmd=${encodeURIComponent(cmd)}`);
+  STATE.cmdWs = ws;
+  ws.onmessage = e => {
+    const msg = JSON.parse(e.data);
+    if (msg.type === 'log') appendLog(msg.line);
+    else if (msg.type === 'done') {
+      document.getElementById('console-status').textContent = `● DONE`;
+      document.getElementById('console-status').style.color = '#10b981';
+      toast(`${cmd} complete`, 'success');
+      const refreshMap = {
+        'vc-jobs': () => { if (STATE.currentScreen === 'vc') loadVC(); },
+        'funding': () => { if (STATE.currentScreen === 'funding') loadFunding(); },
+        'recommend': () => { if (STATE.currentScreen === 'jobs') loadJobs(); },
+        'outreach-enrich': loadOutreach,
+      };
+      if (refreshMap[cmd]) refreshMap[cmd]();
+    } else if (msg.type === 'error') appendLog('ERROR: ' + msg.msg);
+  };
+  ws.onerror = () => toast('WebSocket error', 'error');
+  ws.onclose = () => { STATE.cmdWs = null; };
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// HELPERS
+// ═══════════════════════════════════════════════════════════════════════════
+
+function relTime(iso) {
+  if (!iso) return '—';
+  const d = new Date(iso), now = new Date();
+  const diff = (now - d) / 1000;
+  if (diff < 60) return 'just now';
+  if (diff < 3600) return `${Math.floor(diff/60)}m ago`;
+  if (diff < 86400) return `${Math.floor(diff/3600)}h ago`;
+  return `${Math.floor(diff/86400)}d ago`;
+}
+
+function daysSince(iso) {
+  if (!iso) return 0;
+  return Math.floor((new Date() - new Date(iso)) / 86400000);
+}
+
+function fmtDate(iso) {
+  if (!iso) return '—';
+  return new Date(iso).toLocaleDateString('en-IN', {month:'short', day:'numeric'});
+}
+
+function bucketChip(b) {
+  const cls = { must_apply:'chip-must', high:'chip-high', medium:'chip-medium', low:'chip-low', '':'chip-low' };
+  return `<span class="chip ${cls[b]||'chip-low'}">${BUCKET_LABEL[b]||b||'—'}</span>`;
+}
+
+function statusChip(s) {
+  const cls = { shortlisted:'chip-shortlisted', applied:'chip-applied', screening:'chip-screening', interview:'chip-interview', offer:'chip-applied', rejected:'chip-blocked', skipped:'chip-low' };
+  return `<span class="chip ${cls[s]||'chip-low'}">${STATUS_LABEL[s]||s||'New'}</span>`;
+}
+
+function pltBadge(p) {
+  const c = PLT_COLORS[p] || '#4a5568';
+  return `<span class="plt" style="color:${c};border-color:${c}33;background:${c}11">${p}</span>`;
+}
+
+function scoreBar(score) {
+  const pct = Math.min(100, score || 0);
+  const col = pct >= 80 ? '#10b981' : pct >= 60 ? '#4f7cf6' : pct >= 40 ? '#f59e0b' : '#4a5568';
+  return `<div class="score-bar"><div class="score-track"><div class="score-fill" style="width:${pct}%;background:${col}"></div></div><span style="font-size:10px;font-family:'IBM Plex Mono',monospace;color:${col};width:24px;text-align:right">${score||0}</span></div>`;
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// DASHBOARD
+// ═══════════════════════════════════════════════════════════════════════════
+
+async function loadDashboard() {
+  try {
+    const [stats, today, runs] = await Promise.all([
+      GET('/api/stats'),
+      GET('/api/today'),
+      GET('/api/runs?limit=5'),
+    ]);
+    STATE.stats = stats;
+    renderStatCards(stats);
+    renderActionQueue(today);
+    renderDashFunnel(stats);
+    renderDashSources(stats);
+    renderDashRuns(runs);
+    // Update greeting
+    const hr = new Date().getHours();
+    const greet = hr < 12 ? 'Good morning' : hr < 17 ? 'Good afternoon' : 'Good evening';
+    document.getElementById('dash-greeting').textContent = `${greet}, Minal 👋`;
+    document.getElementById('dash-subtitle').textContent = `${today.date} · ${stats.jobs.total_jobs} total jobs · Last run ${relTime(stats.last_run?.timestamp)}`;
+    // Badges
+    const hp = (stats.jobs.bucket_must_apply||0) + (stats.jobs.bucket_high||0);
+    document.getElementById('badge-dashboard').textContent = hp > 0 ? hp : '';
+    document.getElementById('badge-jobs').textContent = stats.jobs.total_jobs || '';
+    const tracked = stats.jobs.total_applications || 0;
+    document.getElementById('badge-tracker').textContent = tracked || '';
+    const pending = stats.outreach.emails_pending_review || 0;
+    document.getElementById('badge-outreach').textContent = pending || '';
+  } catch(e) {
+    document.getElementById('dash-content').innerHTML = `<div style="padding:40px;text-align:center;color:#ef4444">Failed to load dashboard: ${e.message}</div>`;
+  }
+}
+
+function renderStatCards(stats) {
+  const j = stats.jobs;
+  const hp = (j.bucket_must_apply||0) + (j.bucket_high||0);
+  const applied = j.applications_by_status?.applied || 0;
+  const pending = stats.outreach.emails_pending_review || 0;
+  document.getElementById('stat-cards').innerHTML = `
+    <div class="stat-card">
+      <div class="lbl">Total Jobs</div>
+      <div class="val">${(j.total_jobs||0).toLocaleString()}</div>
+      <div class="sub">${j.scored_jobs||0} scored · ${j.total_jobs-j.scored_jobs>0?j.total_jobs-j.scored_jobs+' unscored':''}</div>
+    </div>
+    <div class="stat-card" style="border-color:#1a2e56">
+      <div class="lbl" style="color:#4f7cf6">High Priority</div>
+      <div class="val" style="color:#4f7cf6">${hp}</div>
+      <div class="sub">${j.bucket_must_apply||0} must apply · ${j.bucket_high||0} high</div>
+    </div>
+    <div class="stat-card" style="border-color:#1a3022">
+      <div class="lbl" style="color:#10b981">Applied</div>
+      <div class="val" style="color:#10b981">${applied}</div>
+      <div class="sub">${j.applications_by_status?.screening||0} screening · ${j.applications_by_status?.interview||0} interview</div>
+    </div>
+    <div class="stat-card" style="border-color:#1a2d10">
+      <div class="lbl" style="color:#a3e635">Outreach</div>
+      <div class="val" style="color:#a3e635">${pending}</div>
+      <div class="sub">${stats.outreach.emails_sent_count||0} sent · ${pending} pending review</div>
+    </div>
+  `;
+}
+
+function renderActionQueue(today) {
+  const el = document.getElementById('action-queue');
+  if (!today.actions?.length) {
+    el.innerHTML = `<div class="empty"><div class="icon">✅</div><div class="title">All caught up!</div><div class="sub">No pending actions for today.</div></div>`;
+    return;
+  }
+  const badgeColors = {
+    brand: ['#1a2240','#4f7cf6'],
+    amber: ['#1a1200','#f59e0b'],
+    green: ['#0a1f17','#10b981'],
+    sky: ['#0a1828','#38bdf8'],
+    purple: ['#160a28','#a78bfa'],
+  };
+  const icons = { review_jobs:'💼', followup:'⏰', interview_prep:'🎯', outreach_review:'✉️', funded_leads:'📈' };
+  el.innerHTML = today.actions.map(a => {
+    const [bg, col] = badgeColors[a.badge_color] || ['#1e2538','#64748b'];
+    return `<div class="action-item fade-in" onclick="handleAction('${a.type}')">
+      <div class="action-icon" style="background:${bg}">${icons[a.type]||'📌'}</div>
+      <div style="flex:1">
+        <div style="font-size:13px;font-weight:500;color:#c9d4e8">${a.label}</div>
+        <div style="font-size:11px;color:#4a5568;margin-top:2px">${a.detail||''}</div>
+      </div>
+      <span class="chip" style="background:${bg};color:${col};border-color:${col}33;flex-shrink:0">${a.badge}</span>
+    </div>`;
+  }).join('');
+}
+
+function handleAction(type) {
+  const map = { review_jobs:'jobs', followup:'tracker', interview_prep:'tracker', outreach_review:'outreach', funded_leads:'funding' };
+  if (map[type]) navigate(map[type]);
+}
+
+function renderDashFunnel(stats) {
+  const j = stats.jobs;
+  const apps = j.applications_by_status || {};
+  const total = j.total_jobs || 1;
+  const stages = [
+    { label:'Scraped', val: j.total_jobs||0, col:'#4a5568' },
+    { label:'Scored', val: j.scored_jobs||0, col:'#4f7cf6' },
+    { label:'High+Must', val: (j.bucket_must_apply||0)+(j.bucket_high||0), col:'#6b93ff' },
+    { label:'Applied', val: apps.applied||0, col:'#10b981' },
+    { label:'Screening', val: apps.screening||0, col:'#f97316' },
+    { label:'Interview', val: apps.interview||0, col:'#c084fc' },
+    { label:'Offer', val: apps.offer||0, col:'#fbbf24' },
+  ];
+  const maxVal = stages[0].val || 1;
+  document.getElementById('dash-funnel').innerHTML = stages.map(s => `
+    <div class="funnel-row">
+      <div class="funnel-label">${s.label}</div>
+      <div class="funnel-bar">
+        <div class="funnel-fill" style="width:${Math.max(2,s.val/maxVal*100)}%;background:${s.col}18;border-left:2px solid ${s.col}">
+          <span class="funnel-count" style="color:${s.col}">${s.val}</span>
+        </div>
+      </div>
+    </div>
+  `).join('');
+}
+
+function renderDashSources(stats) {
+  const sources = (stats.sources || []).slice(0, 6);
+  if (!sources.length) { document.getElementById('dash-sources').innerHTML = '<div style="color:#4a5568;font-size:12px;text-align:center;padding:12px">No data yet</div>'; return; }
+  const max = Math.max(...sources.map(s => s.total), 1);
+  document.getElementById('dash-sources').innerHTML = sources.map(s => {
+    const c = PLT_COLORS[s.platform] || '#4a5568';
+    return `<div style="display:flex;align-items:center;gap:8px;padding:4px 0">
+      <span style="font-size:9px;font-family:'IBM Plex Mono',monospace;font-weight:700;color:${c};width:80px;text-overflow:ellipsis;overflow:hidden">${s.platform}</span>
+      <div style="flex:1;height:14px;background:#0d1117;border-radius:2px;overflow:hidden">
+        <div style="height:100%;background:${c}22;border-left:2px solid ${c};width:${s.total/max*100}%;display:flex;align-items:center;padding-left:4px">
+          <span style="font-size:9px;color:${c};font-family:'IBM Plex Mono',monospace">${s.total}</span>
+        </div>
+      </div>
+      <span style="font-size:9px;color:#4a5568;font-family:'IBM Plex Mono',monospace;width:28px;text-align:right">${Math.round(s.avg_score||0)}</span>
+    </div>`;
+  }).join('');
+}
+
+function renderDashRuns(runs) {
+  if (!runs?.length) { document.getElementById('dash-runs').innerHTML = '<div style="padding:16px;color:#4a5568;font-size:12px;text-align:center">No runs recorded yet</div>'; return; }
+  document.getElementById('dash-runs').innerHTML = `
+    <table class="data-table">
+      <thead><tr><th>Run</th><th>Timestamp</th><th>New Jobs</th><th>Platforms</th><th>Errors</th></tr></thead>
+      <tbody>${runs.map(r => {
+        const errCount = Object.keys(r.errors||{}).length;
+        const platforms = (r.platforms_scraped||[]).slice(0,4).join(', ') + ((r.platforms_scraped||[]).length>4?` +${r.platforms_scraped.length-4}`:'');
+        return `<tr class="row-hover">
+          <td style="font-family:'IBM Plex Mono',monospace;color:#4a5568;font-size:11px">#${r.run_id}</td>
+          <td style="font-size:12px;color:#8892a4">${fmtDate(r.timestamp)} ${new Date(r.timestamp).toLocaleTimeString('en',{hour:'2-digit',minute:'2-digit'})}</td>
+          <td style="font-family:'IBM Plex Mono',monospace;font-weight:600;color:${r.new_count>0?'#10b981':'#4a5568'}">${r.new_count>0?'+':''  }${r.new_count}</td>
+          <td style="font-size:11px;color:#64748b">${platforms}</td>
+          <td style="font-size:11px;color:${errCount>0?'#ef4444':'#4a5568'}">${errCount>0?errCount+' errors':'—'}</td>
+        </tr>`;
+      }).join('')}</tbody>
+    </table>`;
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// JOBS
+// ═══════════════════════════════════════════════════════════════════════════
+
+let _jobDebounce = null;
+function debouncedJobSearch() {
+  clearTimeout(_jobDebounce);
+  _jobDebounce = setTimeout(loadJobs, 320);
+}
+
+async function loadJobs(page) {
+  page = page || 1;
+  STATE.jobs.page = page;
+  const search = document.getElementById('job-search')?.value || '';
+  const platform = document.getElementById('job-platform')?.value || '';
+  const bucket = document.getElementById('job-bucket')?.value || '';
+  const sort = document.getElementById('job-sort')?.value || 'relevance';
+  const url = `/api/jobs?page=${page}&limit=50&search=${encodeURIComponent(search)}&platform=${platform}&bucket=${bucket}&sort=${sort}`;
+  document.getElementById('jobs-tbody').innerHTML = '<tr><td colspan="8" style="text-align:center;padding:30px;color:#4a5568">Loading...</td></tr>';
+  try {
+    const data = await GET(url);
+    STATE.jobs = { ...STATE.jobs, ...data };
+    renderJobsTable(data.jobs);
+    document.getElementById('job-count').textContent = `${data.total.toLocaleString()} jobs`;
+    renderJobsPagination(data);
+  } catch(e) {
+    document.getElementById('jobs-tbody').innerHTML = `<tr><td colspan="8" style="text-align:center;padding:30px;color:#ef4444">Error: ${e.message}</td></tr>`;
+  }
+}
+
+function renderJobsTable(jobs) {
+  if (!jobs?.length) {
+    document.getElementById('jobs-tbody').innerHTML = '<tr><td colspan="8"><div class="empty"><div class="icon">🔍</div><div class="title">No jobs found</div><div class="sub">Try adjusting your filters</div></div></td></tr>';
+    return;
+  }
+  document.getElementById('jobs-tbody').innerHTML = jobs.map(j => {
+    const app = j.application;
+    const rowCls = app?.status === 'applied' ? 'applied' : app?.status === 'shortlisted' ? 'shortlisted' : 'row-hover';
+    const actionBtns = app
+      ? `<span style="font-size:11px;color:#4a5568">${STATUS_LABEL[app.status]||app.status}</span>`
+      : `<div style="display:flex;gap:6px">
+          <button class="btn-primary btn-sm" onclick="applyJob('${j.id}',this)">Apply</button>
+          <button class="btn-ghost btn-sm" onclick="saveJob('${j.id}',this)">Save</button>
+          <button class="btn-ghost btn-sm" style="color:#ef4444;border-color:#3d1515" onclick="skipJob('${j.id}',this)">Skip</button>
+        </div>`;
+    const skills = Array.isArray(j.skills) ? j.skills.slice(0,3).map(s => `<span style="font-size:9px;color:#4a5568;background:#161b27;border:1px solid #1e2538;padding:1px 5px;border-radius:3px">${s}</span>`).join('') : '';
+    return `<tr class="${rowCls}" data-id="${j.id}">
+      <td>
+        <div style="font-size:13px;font-weight:500;color:#c9d4e8">${j.title}</div>
+        <div style="font-size:11px;color:#4a5568;margin-top:2px">${j.company}</div>
+        <div style="margin-top:4px;display:flex;gap:3px;flex-wrap:wrap">${skills}</div>
+      </td>
+      <td>${pltBadge(j.platform)}</td>
+      <td style="font-size:12px;color:#64748b">${j.location||'—'}</td>
+      <td style="font-size:12px;font-family:'IBM Plex Mono',monospace;color:${j.salary?'#a3e635':'#4a5568'}">${j.salary||'—'}</td>
+      <td>${scoreBar(j.priority_score)}</td>
+      <td style="font-size:11px;color:#4a5568;font-family:'IBM Plex Mono',monospace">${relTime(j.scraped_at)}</td>
+      <td>${app ? statusChip(app.status) : bucketChip(j.priority_bucket)}</td>
+      <td>${actionBtns}</td>
+    </tr>`;
+  }).join('');
+}
+
+function renderJobsPagination(data) {
+  const el = document.getElementById('jobs-pagination');
+  if (data.pages <= 1) { el.innerHTML = ''; return; }
+  const btns = [];
+  if (data.page > 1) btns.push(`<button class="btn-ghost btn-sm" onclick="loadJobs(${data.page-1})">← Prev</button>`);
+  btns.push(`<span style="font-size:12px;color:#4a5568;font-family:'IBM Plex Mono',monospace;padding:0 12px">Page ${data.page} of ${data.pages}</span>`);
+  if (data.page < data.pages) btns.push(`<button class="btn-ghost btn-sm" onclick="loadJobs(${data.page+1})">Next →</button>`);
+  el.innerHTML = `<div style="display:flex;align-items:center;justify-content:center;gap:8px">${btns.join('')}</div>`;
+}
+
+async function applyJob(id, btn) {
+  btn.disabled = true; btn.textContent = '...';
+  try {
+    await POST(`/api/jobs/${id}/status`, { status: 'applied' });
+    toast('Marked as applied ✓', 'success');
+    const row = document.querySelector(`tr[data-id="${id}"]`);
+    if (row) { row.className = 'applied'; row.cells[7].innerHTML = '<span style="font-size:11px;color:#10b981">Applied ✓</span>'; row.cells[6].innerHTML = statusChip('applied'); }
+  } catch(e) { btn.disabled = false; btn.textContent = 'Apply'; toast('Error: ' + e.message, 'error'); }
+}
+
+async function saveJob(id, btn) {
+  btn.disabled = true;
+  try {
+    await POST(`/api/jobs/${id}/shortlist`);
+    toast('Job saved to tracker', 'success');
+    btn.textContent = 'Saved';
+    btn.classList.add('chip-shortlisted');
+  } catch(e) { btn.disabled = false; toast('Error: ' + e.message, 'error'); }
+}
+
+async function skipJob(id, btn) {
+  try {
+    await POST(`/api/jobs/${id}/status`, { status: 'skipped' });
+    const row = document.querySelector(`tr[data-id="${id}"]`);
+    if (row) row.style.opacity = '0.3';
+  } catch(e) { toast('Error: ' + e.message, 'error'); }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// TRACKER (KANBAN)
+// ═══════════════════════════════════════════════════════════════════════════
+
+const COLUMNS = [
+  { status:'shortlisted', label:'Saved', color:'#60a5fa', dot:'#1a2e56' },
+  { status:'applied',     label:'Applied', color:'#10b981', dot:'#0a1f17' },
+  { status:'screening',   label:'Screening', color:'#f97316', dot:'#1a100a' },
+  { status:'interview',   label:'Interview', color:'#c084fc', dot:'#160a28' },
+  { status:'offer',       label:'Offer 🎉', color:'#fbbf24', dot:'#1a1400' },
+  { status:'rejected',    label:'Rejected', color:'#ef4444', dot:'#1a0a0a' },
+];
+
+async function loadTracker() {
+  const board = document.getElementById('kanban-board');
+  board.innerHTML = '<div style="color:#4a5568;font-size:13px;padding:40px">Loading...</div>';
+  try {
+    const apps = await GET('/api/applications');
+    const byStatus = {};
+    COLUMNS.forEach(c => { byStatus[c.status] = []; });
+    apps.forEach(a => {
+      if (byStatus[a.status]) byStatus[a.status].push(a);
+      else byStatus['shortlisted']?.push(a); // fallback
+    });
+    const total = apps.length;
+    document.getElementById('tracker-subtitle').textContent = `${total} applications tracked across ${COLUMNS.length} stages`;
+    board.innerHTML = COLUMNS.map(col => `
+      <div class="kanban-col">
+        <div class="kanban-header">
+          <div style="width:8px;height:8px;border-radius:50%;background:${col.color};flex-shrink:0"></div>
+          <span style="font-size:11px;font-weight:600;color:#8892a4;text-transform:uppercase;letter-spacing:.05em">${col.label}</span>
+          <span style="margin-left:auto;font-size:10px;font-family:'IBM Plex Mono',monospace;background:${col.dot};color:${col.color};border:1px solid ${col.color}33;padding:1px 6px;border-radius:10px">${byStatus[col.status]?.length||0}</span>
+        </div>
+        <div class="kanban-drop" id="col-${col.status}"
+          ondragover="event.preventDefault();this.classList.add('drag-target')"
+          ondragleave="this.classList.remove('drag-target')"
+          ondrop="dropCard('${col.status}',this)">
+          ${byStatus[col.status]?.length ? byStatus[col.status].map(a => renderKanbanCard(a)).join('') :
+            `<div style="border:1px dashed ${col.dot};border-radius:8px;padding:20px;text-align:center;color:#374151;font-size:11px">Drop here</div>`}
+        </div>
+      </div>
+    `).join('');
+  } catch(e) {
+    board.innerHTML = `<div style="padding:40px;color:#ef4444">Error: ${e.message}</div>`;
+  }
+}
+
+function renderKanbanCard(app) {
+  const job = app.job || {};
+  const days = app.applied_at ? daysSince(app.applied_at) : daysSince(app.last_action_at);
+  return `<div class="kanban-card fade-in" draggable="true"
+    ondragstart="startDrag('${app.id}','${app.status}',this)"
+    ondragend="endDrag(this)">
+    <div style="font-size:12px;font-weight:600;color:#c9d4e8">${job.title || app.title}</div>
+    <div style="font-size:11px;color:#4a5568;margin-top:3px">${job.company || app.company}</div>
+    ${job.priority_score ? `<div style="margin-top:6px">${scoreBar(job.priority_score)}</div>` : ''}
+    <div style="margin-top:8px;display:flex;align-items:center;justify-content:space-between">
+      ${days > 0 ? `<span style="font-size:10px;color:${days>7?'#f59e0b':'#4a5568'};font-family:'IBM Plex Mono',monospace">Day ${days}</span>` : '<span></span>'}
+      ${pltBadge(job.platform||'—')}
+    </div>
+    ${app.notes ? `<div style="margin-top:6px;font-size:10px;color:#374151;font-style:italic">${app.notes}</div>` : ''}
+  </div>`;
+}
+
+function startDrag(appId, status, el) {
+  STATE.dragJobId = appId;
+  STATE.dragStatus = status;
+  el.style.opacity = '.5';
+}
+function endDrag(el) { el.style.opacity = '1'; }
+
+async function dropCard(newStatus, col) {
+  col.classList.remove('drag-target');
+  if (!STATE.dragJobId || STATE.dragStatus === newStatus) return;
+  try {
+    await POST(`/api/applications/${STATE.dragJobId}/status`, { status: newStatus });
+    toast(`Moved to ${STATUS_LABEL[newStatus]||newStatus}`, 'success');
+    loadTracker();
+  } catch(e) { toast('Error: ' + e.message, 'error'); }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// OUTREACH
+// ═══════════════════════════════════════════════════════════════════════════
+
+async function loadOutreach() {
+  try {
+    const [ostats, filterStatus] = [
+      await GET('/api/outreach/stats'),
+      document.getElementById('outreach-filter')?.value || 'draft',
+    ];
+    renderOutreachStages(ostats);
+    document.getElementById('outreach-subtitle').textContent = `${ostats.sent||0} sent · ${ostats.replied||0} replied · ${ostats.emails_draft||0} pending review`;
+    const emails = await GET(`/api/outreach/emails?status=${filterStatus}`);
+    renderEmailList(emails);
+  } catch(e) {
+    document.getElementById('email-list').innerHTML = `<div style="color:#ef4444;font-size:13px">Error: ${e.message}</div>`;
+  }
+}
+
+function renderOutreachStages(s) {
+  const stages = [
+    { n:1, label:'Enrich', val:s.new||0, col:'#a78bfa' },
+    { n:2, label:'Draft', val:s.emails_draft||0, col:'#4f7cf6' },
+    { n:3, label:'Review', val:s.emails_draft||0, col:'#f59e0b', active:true },
+    { n:4, label:'Send', val:s.emails_approved||0, col:'#10b981' },
+    { n:5, label:'Track', val:s.replied||0, col:'#64748b' },
+  ];
+  document.getElementById('outreach-stages').innerHTML = stages.map((st,i) => `
+    <div style="display:flex;align-items:center;gap:8px">
+      <div style="display:flex;align-items:center;gap:6px;padding:6px 12px;background:${st.active?'#161b27':'transparent'};border:1px solid ${st.active?st.col+'44':'#1e2538'};border-radius:7px">
+        <div style="width:18px;height:18px;border-radius:50%;background:${st.col};display:flex;align-items:center;justify-content:center;font-size:9px;font-weight:700;color:#000">${st.n}</div>
+        <span style="font-size:12px;font-weight:500;color:${st.active?st.col:'#64748b'}">${st.label}</span>
+        <span style="font-size:10px;font-family:'IBM Plex Mono',monospace;color:${st.active?st.col:'#374151'}">${st.val}</span>
+      </div>
+      ${i<stages.length-1?'<span style="color:#1e2538;font-size:12px">›</span>':''}
+    </div>
+  `).join('');
+}
+
+function renderEmailList(emails) {
+  const el = document.getElementById('email-list');
+  if (!emails?.length) {
+    el.innerHTML = `<div class="empty"><div class="icon">📭</div><div class="title">No emails in this stage</div><div class="sub">Run outreach-enrich to populate the queue</div></div>`;
+    return;
+  }
+  el.innerHTML = emails.map(e => `
+    <div class="email-card fade-in" id="email-${e.id}">
+      <div style="padding:14px 16px;display:flex;align-items:flex-start;justify-content:space-between;gap:12px">
+        <div style="flex:1">
+          <div style="font-size:13px;font-weight:600;color:#c9d4e8">${e.contact_name||'Unknown'} — <span style="color:#8892a4;font-weight:400">${e.contact_title||''}</span></div>
+          <div style="font-size:11px;color:#4a5568;margin-top:2px">${e.company} · ${e.contact_email||'No email'} <span style="color:${e.contact_email_status==='verified'?'#10b981':'#f59e0b'}">${e.contact_email_status==='verified'?'✓ verified':'⚠ unverified'}</span></div>
+          ${e.source_job_title ? `<div style="font-size:10px;color:#374151;margin-top:2px">Re: ${e.source_job_title}</div>` : ''}
+        </div>
+        <div style="display:flex;gap:6px;flex-shrink:0">
+          <button class="btn-success btn-sm" onclick="approveEmail('${e.id}')">✓ Approve</button>
+          <button class="btn-ghost btn-sm" onclick="toggleEdit('${e.id}')">Edit</button>
+          <button class="btn-danger btn-sm" onclick="skipEmailFn('${e.id}')">Skip</button>
+        </div>
+      </div>
+      <div style="padding:0 16px">
+        <div style="font-size:11px;color:#4a5568;margin-bottom:4px;font-family:'IBM Plex Mono',monospace">Subject: <span style="color:#8892a4">${e.subject||'(no subject)'}</span></div>
+        <div class="email-body" id="body-${e.id}">${(e.body_plain||'').replace(/\n/g,'<br>')}</div>
+        <button onclick="toggleExpand('${e.id}')" style="font-size:10px;color:#4a5568;background:none;border:none;cursor:pointer;padding:4px 0;margin-bottom:4px">Show more ↓</button>
+      </div>
+      <div id="edit-${e.id}" style="display:none;padding:12px 16px;border-top:1px solid #1e2538">
+        <input id="subj-${e.id}" class="input" style="width:100%;margin-bottom:8px;font-size:12px" value="${(e.subject||'').replace(/"/g,'&quot;')}"/>
+        <textarea id="body-edit-${e.id}" class="edit-area">${e.body_plain||''}</textarea>
+        <div style="display:flex;gap:8px;margin-top:8px">
+          <button class="btn-primary btn-sm" onclick="saveAndApproveEmail('${e.id}')">Save & Approve</button>
+          <button class="btn-ghost btn-sm" onclick="document.getElementById('edit-${e.id}').style.display='none'">Cancel</button>
+        </div>
+      </div>
+    </div>
+  `).join('');
+}
+
+function toggleExpand(id) {
+  const el = document.getElementById(`body-${id}`);
+  el.classList.toggle('expanded');
+}
+
+function toggleEdit(id) {
+  const el = document.getElementById(`edit-${id}`);
+  el.style.display = el.style.display === 'none' ? 'block' : 'none';
+}
+
+async function approveEmail(id) {
+  try {
+    await POST(`/api/outreach/emails/${id}/approve`);
+    const card = document.getElementById(`email-${id}`);
+    card.classList.add('fading');
+    setTimeout(() => card.remove(), 200);
+    toast('Email approved — ready to send', 'success');
+  } catch(e) { toast('Error: ' + e.message, 'error'); }
+}
+
+async function skipEmailFn(id) {
+  try {
+    await POST(`/api/outreach/emails/${id}/skip`);
+    const card = document.getElementById(`email-${id}`);
+    card.classList.add('fading');
+    setTimeout(() => card.remove(), 200);
+    toast('Email skipped', 'info');
+  } catch(e) { toast('Error: ' + e.message, 'error'); }
+}
+
+async function saveAndApproveEmail(id) {
+  const subject = document.getElementById(`subj-${id}`)?.value || '';
+  const body_plain = document.getElementById(`body-edit-${id}`)?.value || '';
+  try {
+    await POST(`/api/outreach/emails/${id}/edit`, { subject, body_plain });
+    await POST(`/api/outreach/emails/${id}/approve`);
+    const card = document.getElementById(`email-${id}`);
+    card.classList.add('fading');
+    setTimeout(() => card.remove(), 200);
+    toast('Saved & approved', 'success');
+  } catch(e) { toast('Error: ' + e.message, 'error'); }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// SCRAPERS
+// ═══════════════════════════════════════════════════════════════════════════
+
+async function loadScrapers() {
+  const grid = document.getElementById('scrapers-grid');
+  try {
+    const scrapers = await GET('/api/scrapers');
+    const ok = scrapers.filter(s => s.health==='ok').length;
+    const warn = scrapers.filter(s => s.health==='warning').length;
+    document.getElementById('scrapers-subtitle').textContent = `${scrapers.length} platforms · ${ok} healthy · ${warn} need attention`;
+    grid.innerHTML = scrapers.map(s => {
+      const healthCls = { ok:'health-ok', warning:'health-warning', blocked:'health-blocked' }[s.health] || 'health-ok';
+      const healthLabel = { ok:'Active', warning:'Action needed', blocked:'Blocked' }[s.health] || s.health;
+      return `<div class="scraper-card fade-in">
+        <div style="display:flex;align-items:flex-start;justify-content:space-between;margin-bottom:10px">
+          <div style="display:flex;align-items:center;gap:8px">
+            <span style="font-size:18px">${s.icon}</span>
+            <span style="font-size:13px;font-weight:600;color:#c9d4e8">${s.label}</span>
+          </div>
+          <div class="health-dot ${healthCls}"></div>
+        </div>
+        <div style="font-size:22px;font-weight:700;font-family:'IBM Plex Mono',monospace;color:${s.job_count>0?'#e2e8f0':'#374151'}">${s.job_count}</div>
+        <div style="font-size:10px;color:#4a5568;margin-top:2px;margin-bottom:8px">${s.last_scraped ? 'Last: '+relTime(s.last_scraped) : 'Never run'}</div>
+        <div style="font-size:10px;margin-bottom:10px;color:${s.health==='ok'?'#10b981':s.health==='warning'?'#f59e0b':'#ef4444'}">${s.health_msg || healthLabel}</div>
+        <button class="btn-ghost btn-sm" style="width:100%;font-size:11px;${s.cloudflare?'opacity:.4;cursor:not-allowed':''}"
+          ${s.cloudflare ? 'disabled' : `onclick="runSingleScraper('${s.name}',this)"`}>
+          ${s.cloudflare ? 'Cloudflare Blocked' : s.requires_login && s.health!=='ok' ? '🔑 Re-login & Run' : '▶ Run now'}
+        </button>
+      </div>`;
+    }).join('');
+    // Add schedule card
+    grid.innerHTML += `<div class="scraper-card" style="border-color:#1a2e56">
+      <div style="font-size:13px;font-weight:600;color:#4f7cf6;margin-bottom:8px">Auto-Schedule</div>
+      <div style="font-size:11px;color:#64748b;margin-bottom:4px">🕘 9:00 AM IST — daily</div>
+      <div style="font-size:11px;color:#64748b;margin-bottom:14px">🕓 4:00 PM IST — daily</div>
+      <button class="btn-primary btn-sm" style="width:100%" onclick="navigate('dashboard')">View Status →</button>
+    </div>`;
+  } catch(e) {
+    grid.innerHTML = `<div style="color:#ef4444;font-size:13px;grid-column:1/-1">Error: ${e.message}</div>`;
+  }
+}
+
+function runSingleScraper(name, btn) {
+  const orig = btn.textContent;
+  btn.disabled = true; btn.textContent = '⟳ Running...';
+  openConsole(`run -p ${name}`);
+  const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+  const ws = new WebSocket(`${proto}//${location.host}/ws/scrape?platforms=${name}`);
+  ws.onmessage = e => {
+    const msg = JSON.parse(e.data);
+    if (msg.type === 'log') appendLog(msg.line);
+    else if (msg.type === 'done') {
+      btn.textContent = '✓ Done'; btn.disabled = false;
+      setTimeout(() => { btn.textContent = orig; }, 2500);
+      toast(`${name} scrape complete`, 'success');
+      loadScrapers();
+    } else if (msg.type === 'error') { btn.textContent = orig; btn.disabled = false; }
+  };
+  ws.onerror = () => { btn.textContent = orig; btn.disabled = false; };
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// VC PORTALS
+// ═══════════════════════════════════════════════════════════════════════════
+
+async function loadVC() {
+  try {
+    const [registry, jobs] = await Promise.all([
+      GET('/api/vc-registry'),
+      GET('/api/vc-jobs?limit=100'),
+    ]);
+    document.getElementById('vc-subtitle').textContent = `${registry.length} VCs registered · ${jobs.total} PM jobs tracked`;
+    // Registry
+    const regEl = document.getElementById('vc-registry');
+    if (!registry?.length || registry[0]?.error) {
+      regEl.innerHTML = '<div style="padding:20px;color:#4a5568;font-size:12px">No registry data</div>';
+    } else {
+      const typeColor = { getro:'#4f7cf6', consider:'#a78bfa', custom:'#10b981', pyjamahr:'#f59e0b' };
+      regEl.innerHTML = registry.filter(v => v.job_portal_url).map(v => `
+        <div style="padding:10px 14px;border-bottom:1px solid #1e2538;display:flex;align-items:flex-start;justify-content:space-between;gap:8px">
+          <div>
+            <div style="font-size:12px;font-weight:500;color:#c9d4e8">${v.name}</div>
+            <div style="font-size:10px;color:#4a5568;margin-top:1px">${v.stage_focus||''} · ${v.location||''}</div>
+          </div>
+          <span style="font-size:9px;padding:2px 6px;border-radius:3px;background:${(typeColor[v.job_portal_type]||'#4a5568')}22;color:${typeColor[v.job_portal_type]||'#4a5568'};border:1px solid ${(typeColor[v.job_portal_type]||'#4a5568')}44;font-family:'IBM Plex Mono',monospace;font-weight:700;flex-shrink:0">${v.job_portal_type||'custom'}</span>
+        </div>
+      `).join('') || '<div style="padding:20px;color:#4a5568;font-size:12px">No portals with active URLs</div>';
+    }
+    // Jobs
+    const jobsEl = document.getElementById('vc-jobs-table');
+    if (!jobs.jobs?.length) {
+      jobsEl.innerHTML = `<div class="empty"><div class="icon">🏦</div><div class="title">No VC jobs yet</div><div class="sub">Click "Scrape VC Jobs" to fetch from portfolio boards</div></div>`;
+    } else {
+      jobsEl.innerHTML = `<table class="data-table">
+        <thead><tr><th>Role</th><th>Company</th><th>Platform</th><th>Score</th><th>Action</th></tr></thead>
+        <tbody>${jobs.jobs.map(j => `<tr class="row-hover">
+          <td><div style="font-size:12px;font-weight:500;color:#c9d4e8">${j.title}</div></td>
+          <td style="font-size:12px;color:#64748b">${j.company}</td>
+          <td>${pltBadge(j.platform)}</td>
+          <td>${scoreBar(j.priority_score)}</td>
+          <td><button class="btn-primary btn-sm" onclick="applyJob('${j.id}',this)">Apply</button></td>
+        </tr>`).join('')}</tbody>
+      </table>`;
+    }
+  } catch(e) {
+    document.getElementById('vc-registry').innerHTML = `<div style="padding:16px;color:#ef4444;font-size:12px">Error: ${e.message}</div>`;
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// FUNDING
+// ═══════════════════════════════════════════════════════════════════════════
+
+async function loadFunding() {
+  const tbody = document.getElementById('funding-tbody');
+  try {
+    const data = await GET('/api/funding');
+    document.getElementById('funding-subtitle').textContent = `${data.length} funded companies tracked`;
+    if (!data?.length) {
+      tbody.innerHTML = '<tr><td colspan="8"><div class="empty"><div class="icon">📈</div><div class="title">No funding data yet</div><div class="sub">Click "Scan Funding News" to fetch from Inc42, YourStory, Entrackr</div></div></td></tr>';
+      return;
+    }
+    const seriesColor = { 'Seed':'#a78bfa','Pre-Series A':'#60a5fa','Series A':'#4f7cf6','Series B':'#10b981','Series C':'#f59e0b','Series D':'#f97316' };
+    tbody.innerHTML = data.map(row => {
+      const col = seriesColor[row.funding_series] || '#4a5568';
+      const pmJobs = parseInt(row.pm_jobs_found||0);
+      return `<tr class="row-hover">
+        <td>
+          <div style="font-size:13px;font-weight:500;color:#c9d4e8">${row.company_name||row.company||'—'}</div>
+          ${row.linkedin_url ? `<a href="${row.linkedin_url}" target="_blank" style="font-size:10px;color:#4f7cf6">LinkedIn ↗</a>` : ''}
+        </td>
+        <td><span class="chip" style="background:${col}22;color:${col};border-color:${col}44">${row.funding_series||'—'}</span></td>
+        <td style="font-family:'IBM Plex Mono',monospace;font-size:12px;color:#a3e635">${row.funding_amount||'—'}</td>
+        <td style="font-size:12px;color:#64748b">${row.sector||'—'}</td>
+        <td style="font-size:12px;color:#64748b">${row.city||row.location||'—'}</td>
+        <td style="font-family:'IBM Plex Mono',monospace;font-size:12px;color:${pmJobs>0?'#f59e0b':'#374151'}">${pmJobs > 0 ? pmJobs + ' found' : '—'}</td>
+        <td style="font-size:11px;color:#4a5568;font-family:'IBM Plex Mono',monospace">${row.funding_date ? fmtDate(row.funding_date) : '—'}</td>
+        <td><button class="btn-primary btn-sm" onclick="toast('Draft outreach coming soon','info')">Draft Outreach</button></td>
+      </tr>`;
+    }).join('');
+  } catch(e) {
+    tbody.innerHTML = `<tr><td colspan="8" style="text-align:center;padding:30px;color:#ef4444">Error: ${e.message}</td></tr>`;
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// ANALYTICS
+// ═══════════════════════════════════════════════════════════════════════════
+
+async function loadAnalytics() {
+  const el = document.getElementById('analytics-content');
+  try {
+    const data = await GET('/api/analytics');
+    const f = data.funnel || {};
+    const o = data.outreach || {};
+    const cookies = data.cookies || {};
+    const sources = data.sources || [];
+
+    el.innerHTML = `
+      <!-- Source Quality -->
+      <div style="background:#161b27;border:1px solid #1e2538;border-radius:10px;padding:20px">
+        <div style="font-size:11px;font-weight:600;color:#64748b;text-transform:uppercase;letter-spacing:.06em;margin-bottom:14px;font-family:'IBM Plex Mono',monospace">Source Quality</div>
+        ${sources.length ? sources.map(s => {
+          const c = PLT_COLORS[s.platform]||'#4a5568';
+          const pct = Math.max(2, (s.total / Math.max(...sources.map(x=>x.total||1), 1)) * 100);
+          return `<div style="margin-bottom:10px">
+            <div style="display:flex;justify-content:space-between;margin-bottom:4px">
+              <span style="font-size:11px;color:${c};font-family:'IBM Plex Mono',monospace;font-weight:600">${s.platform}</span>
+              <span style="font-size:10px;color:#4a5568;font-family:'IBM Plex Mono',monospace">${s.total} jobs · avg ${Math.round(s.avg_score||0)} score · ${s.high_quality||0} high</span>
+            </div>
+            <div class="pbar"><div class="pbar-fill" style="width:${pct}%;background:${c}"></div></div>
+          </div>`;
+        }).join('') : '<div style="color:#4a5568;font-size:12px">No data yet</div>'}
+      </div>
+
+      <!-- Conversion Funnel -->
+      <div style="background:#161b27;border:1px solid #1e2538;border-radius:10px;padding:20px">
+        <div style="font-size:11px;font-weight:600;color:#64748b;text-transform:uppercase;letter-spacing:.06em;margin-bottom:14px;font-family:'IBM Plex Mono',monospace">Conversion Funnel</div>
+        ${[
+          ['Scraped', f.scraped||0, '#4a5568'],
+          ['Scored', f.scored||0, '#4f7cf6'],
+          ['Must Apply', f.must_apply||0, '#a78bfa'],
+          ['High Priority', f.high||0, '#6b93ff'],
+          ['Shortlisted', f.shortlisted||0, '#38bdf8'],
+          ['Applied', f.applied||0, '#10b981'],
+          ['Screening', f.screening||0, '#f97316'],
+          ['Interview', f.interview||0, '#c084fc'],
+          ['Offer', f.offer||0, '#fbbf24'],
+        ].map(([label, val, col]) => {
+          const maxV = f.scraped || 1;
+          const pct = Math.max(1, val/maxV*100);
+          return `<div style="display:flex;align-items:center;gap:10px;margin-bottom:6px">
+            <span style="font-size:10px;color:#4a5568;font-family:'IBM Plex Mono',monospace;width:80px;text-align:right">${label}</span>
+            <div style="flex:1;height:18px;background:#0d1117;border-radius:3px;overflow:hidden">
+              <div style="height:100%;width:${pct}%;background:${col}22;border-left:2px solid ${col};display:flex;align-items:center;padding-left:6px">
+                <span style="font-size:9px;font-family:'IBM Plex Mono',monospace;font-weight:700;color:${col}">${val}</span>
+              </div>
+            </div>
+          </div>`;
+        }).join('')}
+      </div>
+
+      <!-- Outreach Stats -->
+      <div style="background:#161b27;border:1px solid #1e2538;border-radius:10px;padding:20px">
+        <div style="font-size:11px;font-weight:600;color:#64748b;text-transform:uppercase;letter-spacing:.06em;margin-bottom:14px;font-family:'IBM Plex Mono',monospace">Outreach Performance</div>
+        <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin-bottom:14px">
+          <div style="text-align:center">
+            <div style="font-size:28px;font-weight:700;font-family:'IBM Plex Mono',monospace;color:#e2e8f0">${o.sent||0}</div>
+            <div style="font-size:10px;color:#4a5568;text-transform:uppercase;letter-spacing:.06em">Sent</div>
+          </div>
+          <div style="text-align:center">
+            <div style="font-size:28px;font-weight:700;font-family:'IBM Plex Mono',monospace;color:#10b981">${o.replied||0}</div>
+            <div style="font-size:10px;color:#4a5568;text-transform:uppercase;letter-spacing:.06em">Replied</div>
+          </div>
+          <div style="text-align:center">
+            <div style="font-size:28px;font-weight:700;font-family:'IBM Plex Mono',monospace;color:#4f7cf6">${o.reply_rate||0}%</div>
+            <div style="font-size:10px;color:#4a5568;text-transform:uppercase;letter-spacing:.06em">Reply Rate</div>
+          </div>
+        </div>
+        ${o.reply_rate > 0 ? `<div style="font-size:11px;color:#4a5568;text-align:center">Industry avg: ~8% · You're at <span style="color:#10b981;font-weight:600">${(o.reply_rate/8).toFixed(1)}×</span></div>` : ''}
+      </div>
+
+      <!-- Session Health -->
+      <div style="background:#161b27;border:1px solid #1e2538;border-radius:10px;padding:20px">
+        <div style="font-size:11px;font-weight:600;color:#64748b;text-transform:uppercase;letter-spacing:.06em;margin-bottom:14px;font-family:'IBM Plex Mono',monospace">Session Health</div>
+        ${Object.keys(cookies).length ? Object.entries(cookies).map(([name, status]) => {
+          const col = {active:'#10b981',expired:'#f59e0b',missing:'#f59e0b',cloudflare:'#ef4444'}[status]||'#4a5568';
+          const label = {active:'Active ✓',expired:'Expired — re-login',missing:'Missing — login needed',cloudflare:'Cloudflare blocked'}[status]||status;
+          return `<div style="display:flex;align-items:center;justify-content:space-between;padding:6px 0;border-bottom:1px solid #1e2538">
+            <span style="font-size:12px;color:#8892a4;font-family:'IBM Plex Mono',monospace">${name}</span>
+            <span class="chip" style="background:${col}22;color:${col};border-color:${col}44;font-size:9px">${label}</span>
+          </div>`;
+        }).join('') : '<div style="color:#4a5568;font-size:12px">No cookie files found</div>'}
+      </div>
+    `;
+  } catch(e) {
+    el.innerHTML = `<div style="color:#ef4444;font-size:13px;grid-column:1/-1">Error: ${e.message}</div>`;
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// INIT
+// ═══════════════════════════════════════════════════════════════════════════
+
+document.addEventListener('DOMContentLoaded', () => {
+  loadDashboard();
+});
+</script>
+</body>
+</html>
