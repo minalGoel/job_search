@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 import re
-from datetime import date
+from datetime import date, datetime
 from typing import Optional
 
 from config.scoring_rules import (
@@ -262,6 +262,21 @@ def score_job(job: dict, company_profile: Optional[dict] = None) -> dict:
 
     if is_direct:
         quality += COMPANY_QUALITY_SCORES["direct_source"]
+
+    # YC company boost — check if this company is in the YC registry
+    if company_profile and company_profile.get("is_yc_backed"):
+        quality += COMPANY_QUALITY_SCORES["yc_company"]
+        reasons.append("yc_company")
+        yc_batch = company_profile.get("yc_batch", "")
+        if yc_batch:
+            try:
+                batch_year = int(yc_batch[1:3])
+                current_year = datetime.now().year % 100
+                if current_year - batch_year <= 2:
+                    quality += COMPANY_QUALITY_SCORES["recent_yc_batch"]
+                    reasons.append(f"recent_yc_batch:{yc_batch}")
+            except (ValueError, IndexError):
+                pass
 
     quality = max(0, min(100, quality))
 

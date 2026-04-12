@@ -114,6 +114,8 @@ class JobDB:
                 seen_platforms TEXT DEFAULT '[]',
                 careers_page TEXT,
                 hq_location TEXT,
+                is_yc_backed INTEGER DEFAULT 0,
+                yc_batch TEXT DEFAULT '',
                 last_refreshed_at TEXT
             );
 
@@ -163,6 +165,60 @@ class JobDB:
             );
             CREATE INDEX IF NOT EXISTS idx_jcm_job ON job_connection_matches(job_id);
             CREATE INDEX IF NOT EXISTS idx_jcm_company ON job_connection_matches(company);
+
+            -- ── YC Startups ─────────────────────────────────────────────
+            CREATE TABLE IF NOT EXISTS yc_companies (
+                id TEXT PRIMARY KEY,
+                company_slug TEXT UNIQUE NOT NULL,
+                company_name TEXT NOT NULL,
+                description TEXT DEFAULT '',
+                long_description TEXT DEFAULT '',
+                batch TEXT DEFAULT '',
+                website TEXT DEFAULT '',
+                hq_location TEXT DEFAULT '',
+                team_size TEXT DEFAULT '',
+                industry TEXT DEFAULT '',
+                subindustry TEXT DEFAULT '',
+                status TEXT DEFAULT 'Active',
+                logo_url TEXT DEFAULT '',
+                founders TEXT DEFAULT '[]',
+                is_hiring INTEGER DEFAULT 0,
+                is_hiring_pm INTEGER DEFAULT 0,
+                hiring_url TEXT DEFAULT '',
+                latest_hiring_check_at TEXT,
+                last_refreshed_at TEXT
+            );
+            CREATE INDEX IF NOT EXISTS idx_yc_batch ON yc_companies(batch);
+            CREATE INDEX IF NOT EXISTS idx_yc_hiring ON yc_companies(is_hiring);
+            CREATE INDEX IF NOT EXISTS idx_yc_hiring_pm ON yc_companies(is_hiring_pm);
+            CREATE INDEX IF NOT EXISTS idx_yc_slug ON yc_companies(company_slug);
+
+            CREATE TABLE IF NOT EXISTS yc_hiring_signals (
+                id TEXT PRIMARY KEY,
+                company_id TEXT NOT NULL,
+                signal_type TEXT NOT NULL,
+                signal_source TEXT DEFAULT '',
+                signal_date TEXT DEFAULT '',
+                signal_detail TEXT DEFAULT '',
+                checked_at TEXT,
+                FOREIGN KEY(company_id) REFERENCES yc_companies(id)
+            );
+            CREATE INDEX IF NOT EXISTS idx_yc_sig_company ON yc_hiring_signals(company_id);
+
+            CREATE TABLE IF NOT EXISTS yc_founder_contacts (
+                id TEXT PRIMARY KEY,
+                yc_company_id TEXT NOT NULL,
+                founder_name TEXT NOT NULL,
+                founder_title TEXT DEFAULT '',
+                founder_email TEXT DEFAULT '',
+                founder_email_verified INTEGER DEFAULT 0,
+                founder_linkedin TEXT DEFAULT '',
+                founder_twitter TEXT DEFAULT '',
+                enrichment_source TEXT DEFAULT '',
+                enriched_at TEXT,
+                FOREIGN KEY(yc_company_id) REFERENCES yc_companies(id)
+            );
+            CREATE INDEX IF NOT EXISTS idx_yc_fc_company ON yc_founder_contacts(yc_company_id);
         """)
         self.conn.commit()
 
@@ -187,6 +243,21 @@ class JobDB:
             if col_name not in existing:
                 self.conn.execute(
                     f"ALTER TABLE jobs ADD COLUMN {col_name} {col_ddl}"
+                )
+
+        # Migrate company_profiles for YC columns
+        cp_cols = [
+            ("is_yc_backed", "INTEGER DEFAULT 0"),
+            ("yc_batch", "TEXT DEFAULT ''"),
+        ]
+        cp_existing = {
+            row[1]
+            for row in self.conn.execute("PRAGMA table_info(company_profiles)").fetchall()
+        }
+        for col_name, col_ddl in cp_cols:
+            if col_name not in cp_existing:
+                self.conn.execute(
+                    f"ALTER TABLE company_profiles ADD COLUMN {col_name} {col_ddl}"
                 )
         self.conn.commit()
 
@@ -430,8 +501,8 @@ class JobDB:
                (normalized_company, company_display_name, company_domain,
                 is_mnc, is_funded, funding_series, funding_amount, funding_date,
                 pm_open_roles_count, seen_platforms, careers_page, hq_location,
-                last_refreshed_at)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                is_yc_backed, yc_batch, last_refreshed_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                ON CONFLICT(normalized_company) DO UPDATE SET
                 company_display_name = excluded.company_display_name,
                 company_domain = excluded.company_domain,
@@ -444,6 +515,8 @@ class JobDB:
                 seen_platforms = excluded.seen_platforms,
                 careers_page = excluded.careers_page,
                 hq_location = excluded.hq_location,
+                is_yc_backed = MAX(excluded.is_yc_backed, company_profiles.is_yc_backed),
+                yc_batch = COALESCE(excluded.yc_batch, company_profiles.yc_batch),
                 last_refreshed_at = excluded.last_refreshed_at""",
             (
                 profile["normalized_company"],
@@ -458,6 +531,8 @@ class JobDB:
                 json.dumps(profile.get("seen_platforms") or []),
                 profile.get("careers_page"),
                 profile.get("hq_location"),
+                int(profile.get("is_yc_backed", 0)),
+                profile.get("yc_batch", ""),
                 profile.get("last_refreshed_at", datetime.now().isoformat()),
             ),
         )
@@ -664,6 +739,262 @@ class JobDB:
                GROUP BY platform ORDER BY avg_score DESC"""
         ).fetchall()
         return [dict(r) for r in rows]
+
+    # ------------------------------------------------------------------
+    # YC Startups
+    # ------------------------------------------------------------------
+
+    def upsert_yc_company(self, company: dict) -> None:
+        """Insert or update a YC company."""
+        self.conn.execute(
+            """INSERT INTO yc_companies
+               (id, company_slug, company_name, description, long_description,
+                batch, website, hq_location, team_size, industry, subindustry,
+                status, logo_url, founders, is_hiring, is_hiring_pm, hiring_url,
+                latest_hiring_check_at, last_refreshed_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+               ON CONFLICT(id) DO UPDATE SET
+                company_name = excluded.company_name,
+                description = COALESCE(excluded.description, yc_companies.description),
+                long_description = COALESCE(excluded.long_description, yc_companies.long_description),
+                batch = COALESCE(excluded.batch, yc_companies.batch),
+                website = COALESCE(excluded.website, yc_companies.website),
+                hq_location = COALESCE(excluded.hq_location, yc_companies.hq_location),
+                team_size = COALESCE(excluded.team_size, yc_companies.team_size),
+                industry = COALESCE(excluded.industry, yc_companies.industry),
+                subindustry = COALESCE(excluded.subindustry, yc_companies.subindustry),
+                status = COALESCE(excluded.status, yc_companies.status),
+                logo_url = COALESCE(excluded.logo_url, yc_companies.logo_url),
+                founders = COALESCE(excluded.founders, yc_companies.founders),
+                is_hiring = excluded.is_hiring,
+                last_refreshed_at = excluded.last_refreshed_at""",
+            (
+                company["id"], company["company_slug"], company["company_name"],
+                company.get("description", ""), company.get("long_description", ""),
+                company.get("batch", ""), company.get("website", ""),
+                company.get("hq_location", ""), company.get("team_size", ""),
+                company.get("industry", ""), company.get("subindustry", ""),
+                company.get("status", "Active"), company.get("logo_url", ""),
+                json.dumps(company.get("founders") or []),
+                int(company.get("is_hiring", 0)),
+                int(company.get("is_hiring_pm", 0)),
+                company.get("hiring_url", ""),
+                company.get("latest_hiring_check_at"),
+                company.get("last_refreshed_at", datetime.now().isoformat()),
+            ),
+        )
+        # Caller should commit after batch
+
+    def upsert_yc_companies(self, companies: list[dict]) -> int:
+        """Bulk upsert YC companies. Returns count inserted/updated."""
+        for c in companies:
+            self.upsert_yc_company(c)
+        self.conn.commit()
+        return len(companies)
+
+    def get_yc_companies(
+        self,
+        batch: Optional[str] = None,
+        hiring_only: bool = False,
+        hiring_pm_only: bool = False,
+        search: str = "",
+        limit: int = 0,
+        offset: int = 0,
+    ) -> list[dict]:
+        """Query YC companies with filters."""
+        conditions = []
+        params: list = []
+
+        if batch:
+            conditions.append("batch = ?")
+            params.append(batch)
+        if hiring_only:
+            conditions.append("is_hiring = 1")
+        if hiring_pm_only:
+            conditions.append("is_hiring_pm = 1")
+        if search:
+            conditions.append("(company_name LIKE ? OR description LIKE ? OR industry LIKE ?)")
+            term = f"%{search}%"
+            params.extend([term, term, term])
+
+        where = f"WHERE {' AND '.join(conditions)}" if conditions else ""
+        sql = f"SELECT * FROM yc_companies {where} ORDER BY batch DESC, company_name ASC"
+        if limit > 0:
+            sql += " LIMIT ?"
+            params.append(limit)
+            if offset > 0:
+                sql += " OFFSET ?"
+                params.append(offset)
+
+        rows = self.conn.execute(sql, params).fetchall()
+        return [self._yc_row_to_dict(r) for r in rows]
+
+    def get_yc_company_by_id(self, company_id: str) -> Optional[dict]:
+        row = self.conn.execute(
+            "SELECT * FROM yc_companies WHERE id = ?", (company_id,)
+        ).fetchone()
+        return self._yc_row_to_dict(row) if row else None
+
+    def update_yc_hiring_status(
+        self, company_id: str, is_hiring_pm: bool, hiring_url: str = "",
+    ) -> None:
+        """Mark a YC company as hiring for PM roles."""
+        self.conn.execute(
+            """UPDATE yc_companies
+               SET is_hiring_pm = ?, hiring_url = ?, latest_hiring_check_at = ?
+               WHERE id = ?""",
+            (int(is_hiring_pm), hiring_url, datetime.now().isoformat(), company_id),
+        )
+        # Caller commits after batch
+
+    def upsert_yc_hiring_signal(self, signal: dict) -> None:
+        self.conn.execute(
+            """INSERT INTO yc_hiring_signals
+               (id, company_id, signal_type, signal_source, signal_date,
+                signal_detail, checked_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?)
+               ON CONFLICT(id) DO UPDATE SET
+                signal_detail = excluded.signal_detail,
+                checked_at = excluded.checked_at""",
+            (
+                signal["id"], signal["company_id"], signal["signal_type"],
+                signal.get("signal_source", ""), signal.get("signal_date", ""),
+                signal.get("signal_detail", ""), signal.get("checked_at", ""),
+            ),
+        )
+
+    def get_yc_hiring_signals(self, company_id: str) -> list[dict]:
+        rows = self.conn.execute(
+            "SELECT * FROM yc_hiring_signals WHERE company_id = ? ORDER BY checked_at DESC",
+            (company_id,),
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+    def upsert_yc_founder_contact(self, contact: dict) -> None:
+        self.conn.execute(
+            """INSERT INTO yc_founder_contacts
+               (id, yc_company_id, founder_name, founder_title, founder_email,
+                founder_email_verified, founder_linkedin, founder_twitter,
+                enrichment_source, enriched_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+               ON CONFLICT(id) DO UPDATE SET
+                founder_title = COALESCE(excluded.founder_title, yc_founder_contacts.founder_title),
+                founder_email = COALESCE(excluded.founder_email, yc_founder_contacts.founder_email),
+                founder_email_verified = excluded.founder_email_verified,
+                founder_linkedin = COALESCE(excluded.founder_linkedin, yc_founder_contacts.founder_linkedin),
+                founder_twitter = COALESCE(excluded.founder_twitter, yc_founder_contacts.founder_twitter),
+                enrichment_source = excluded.enrichment_source,
+                enriched_at = excluded.enriched_at""",
+            (
+                contact["id"], contact["yc_company_id"], contact["founder_name"],
+                contact.get("founder_title", ""), contact.get("founder_email", ""),
+                int(contact.get("founder_email_verified", 0)),
+                contact.get("founder_linkedin", ""), contact.get("founder_twitter", ""),
+                contact.get("enrichment_source", ""),
+                contact.get("enriched_at", datetime.now().isoformat()),
+            ),
+        )
+
+    def get_yc_founder_contacts(self, company_id: str) -> list[dict]:
+        rows = self.conn.execute(
+            "SELECT * FROM yc_founder_contacts WHERE yc_company_id = ? ORDER BY founder_name",
+            (company_id,),
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+    def get_yc_all_founder_contacts(self) -> list[dict]:
+        rows = self.conn.execute(
+            "SELECT fc.*, yc.company_name, yc.batch FROM yc_founder_contacts fc "
+            "JOIN yc_companies yc ON fc.yc_company_id = yc.id "
+            "ORDER BY yc.batch DESC, yc.company_name"
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+    def get_yc_stats(self) -> dict:
+        """Return aggregate YC stats for the dashboard."""
+        stats: dict = {}
+        stats["total_companies"] = self.conn.execute(
+            "SELECT COUNT(*) FROM yc_companies"
+        ).fetchone()[0]
+        stats["active_companies"] = self.conn.execute(
+            "SELECT COUNT(*) FROM yc_companies WHERE status = 'Active'"
+        ).fetchone()[0]
+        stats["hiring_companies"] = self.conn.execute(
+            "SELECT COUNT(*) FROM yc_companies WHERE is_hiring = 1"
+        ).fetchone()[0]
+        stats["hiring_pm"] = self.conn.execute(
+            "SELECT COUNT(*) FROM yc_companies WHERE is_hiring_pm = 1"
+        ).fetchone()[0]
+        stats["total_founders"] = self.conn.execute(
+            "SELECT COUNT(*) FROM yc_founder_contacts"
+        ).fetchone()[0]
+        stats["verified_emails"] = self.conn.execute(
+            "SELECT COUNT(*) FROM yc_founder_contacts WHERE founder_email_verified = 1"
+        ).fetchone()[0]
+        stats["total_signals"] = self.conn.execute(
+            "SELECT COUNT(*) FROM yc_hiring_signals"
+        ).fetchone()[0]
+        # Batch distribution (top 10 batches)
+        batch_rows = self.conn.execute(
+            "SELECT batch, COUNT(*) as cnt FROM yc_companies "
+            "WHERE batch != '' GROUP BY batch ORDER BY batch DESC LIMIT 10"
+        ).fetchall()
+        stats["top_batches"] = [{"batch": r[0], "count": r[1]} for r in batch_rows]
+        return stats
+
+    def get_yc_batches(self) -> list[str]:
+        """Return all distinct YC batches in reverse-chronological order.
+
+        Sorts by year descending, then by season within each year:
+        Winter > Spring > Summer > Fall  (calendar order within a year).
+        """
+        import re as _re
+        _SEASON_ORDER = {"W": 0, "Sp": 1, "S": 2, "F": 3}
+
+        rows = self.conn.execute(
+            "SELECT DISTINCT batch FROM yc_companies WHERE batch != ''"
+        ).fetchall()
+        batches = [r[0] for r in rows]
+
+        def _sort_key(b: str) -> tuple:
+            m = _re.match(r"([A-Za-z]+)(\d+)", b)
+            if not m:
+                return (0, 0)
+            season, year_str = m.group(1), m.group(2)
+            year = int(year_str)
+            return (-year, _SEASON_ORDER.get(season, 9))
+
+        batches.sort(key=_sort_key)
+        return batches
+
+    def count_yc_companies(
+        self, batch: Optional[str] = None, hiring_only: bool = False,
+        hiring_pm_only: bool = False, search: str = "",
+    ) -> int:
+        conditions = []
+        params: list = []
+        if batch:
+            conditions.append("batch = ?")
+            params.append(batch)
+        if hiring_only:
+            conditions.append("is_hiring = 1")
+        if hiring_pm_only:
+            conditions.append("is_hiring_pm = 1")
+        if search:
+            conditions.append("(company_name LIKE ? OR description LIKE ? OR industry LIKE ?)")
+            term = f"%{search}%"
+            params.extend([term, term, term])
+        where = f"WHERE {' AND '.join(conditions)}" if conditions else ""
+        return self.conn.execute(
+            f"SELECT COUNT(*) FROM yc_companies {where}", params
+        ).fetchone()[0]
+
+    def _yc_row_to_dict(self, row: sqlite3.Row) -> dict:
+        d = dict(row)
+        d["founders"] = json.loads(d.get("founders") or "[]")
+        d["is_hiring"] = bool(d.get("is_hiring"))
+        d["is_hiring_pm"] = bool(d.get("is_hiring_pm"))
+        return d
 
     # ------------------------------------------------------------------
     # Internals

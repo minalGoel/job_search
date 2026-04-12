@@ -1072,6 +1072,255 @@ def purge_jobs(
         db.close()
 
 
+# ─── YC Startups ─────────────────────────────────────────────────────────────
+
+
+@app.command(name="yc-sync")
+def yc_sync(
+    batch: Optional[str] = typer.Option(None, "--batch", "-b", help="Filter by YC batch (e.g. S24, W24)"),
+    limit: int = typer.Option(0, "--limit", help="Max companies to fetch (0 = all)"),
+    check_signals: bool = typer.Option(True, "--signals/--no-signals", help="Check hiring signals after sync"),
+) -> None:
+    """Sync Y Combinator company directory and optionally check hiring signals."""
+    _configure_logging()
+    asyncio.run(_run_yc_sync(batch, limit, check_signals))
+
+
+async def _run_yc_sync(batch: Optional[str], limit: int, check_signals: bool) -> None:
+    from storage.db import JobDB
+    from yc_startups.scraper import sync_yc_directory
+    from yc_startups.signals import check_hiring_signals
+
+    batch_filter = [b.strip() for b in batch.split(",")] if batch else None
+
+    typer.echo("Syncing YC company directory...\n")
+    companies = await sync_yc_directory(batch_filter=batch_filter, limit=limit)
+    typer.echo(f"  Fetched {len(companies)} YC companies")
+
+    if not companies:
+        typer.echo("No companies found. Check network connectivity.", err=True)
+        return
+
+    db = JobDB()
+    try:
+        # Convert to dicts and upsert
+        company_dicts = []
+        for c in companies:
+            company_dicts.append({
+                "id": c.id,
+                "company_slug": c.slug,
+                "company_name": c.name,
+                "description": c.description,
+                "long_description": c.long_description,
+                "batch": c.batch,
+                "website": c.website,
+                "hq_location": c.hq_location,
+                "team_size": c.team_size,
+                "industry": c.industry,
+                "subindustry": c.subindustry,
+                "status": c.status,
+                "logo_url": c.logo_url,
+                "founders": c.founders,
+                "is_hiring": int(c.is_hiring),
+                "is_hiring_pm": int(c.is_hiring_pm),
+                "last_refreshed_at": c.last_refreshed_at,
+            })
+
+        count = db.upsert_yc_companies(company_dicts)
+        typer.echo(f"  Upserted {count} companies into DB")
+
+        # Batch summary
+        batches: dict[str, int] = {}
+        for c in companies:
+            batches[c.batch] = batches.get(c.batch, 0) + 1
+        hiring_count = sum(1 for c in companies if c.is_hiring)
+        typer.echo(f"  Hiring (self-reported): {hiring_count}")
+        typer.echo(f"  Batches: {len(batches)} ({', '.join(list(batches.keys())[:5])}...)")
+
+        if check_signals:
+            typer.echo("\nChecking hiring signals...")
+            signals = await check_hiring_signals(company_dicts, db)
+            for s in signals:
+                sig_dict = {
+                    "id": s.id,
+                    "company_id": s.company_id,
+                    "signal_type": s.signal_type,
+                    "signal_source": s.signal_source,
+                    "signal_date": s.signal_date,
+                    "signal_detail": s.signal_detail,
+                    "checked_at": s.checked_at,
+                }
+                db.upsert_yc_hiring_signal(sig_dict)
+            db.conn.commit()
+            typer.echo(f"  Found {len(signals)} hiring signals")
+
+            # Mark companies with PM hiring signals
+            pm_company_ids = set()
+            for s in signals:
+                if "PM" in s.signal_detail or s.signal_type == "scraped_job":
+                    pm_company_ids.add(s.company_id)
+            for cid in pm_company_ids:
+                db.update_yc_hiring_status(cid, is_hiring_pm=True)
+            db.conn.commit()
+            if pm_company_ids:
+                typer.echo(f"  PM hiring detected: {len(pm_company_ids)} companies")
+
+        stats = db.get_yc_stats()
+        typer.echo(f"\nYC Database: {stats['total_companies']} companies, "
+                    f"{stats['hiring_companies']} hiring, {stats['hiring_pm']} hiring PM, "
+                    f"{stats['total_founders']} founders, {stats['verified_emails']} verified emails")
+    finally:
+        db.close()
+
+
+@app.command(name="yc-hiring-check")
+def yc_hiring_check(
+    batch: Optional[str] = typer.Option(None, "--batch", "-b", help="Filter by batch"),
+    force: bool = typer.Option(False, "--force", help="Rescan all companies"),
+) -> None:
+    """Check which YC companies are actively hiring for PM roles."""
+    _configure_logging()
+    asyncio.run(_run_yc_hiring_check(batch, force))
+
+
+async def _run_yc_hiring_check(batch: Optional[str], force: bool) -> None:
+    from storage.db import JobDB
+    from yc_startups.signals import check_hiring_signals
+
+    db = JobDB()
+    try:
+        companies = db.get_yc_companies(batch=batch or "", hiring_only=not force)
+        if not companies:
+            companies = db.get_yc_companies(batch=batch or "")
+        typer.echo(f"Checking hiring signals for {len(companies)} companies...\n")
+
+        signals = await check_hiring_signals(companies, db)
+        for s in signals:
+            sig_dict = {
+                "id": s.id,
+                "company_id": s.company_id,
+                "signal_type": s.signal_type,
+                "signal_source": s.signal_source,
+                "signal_date": s.signal_date,
+                "signal_detail": s.signal_detail,
+                "checked_at": s.checked_at,
+            }
+            db.upsert_yc_hiring_signal(sig_dict)
+
+        # Update PM hiring flags
+        pm_company_ids = set()
+        for s in signals:
+            if "PM" in s.signal_detail or s.signal_type == "scraped_job":
+                pm_company_ids.add(s.company_id)
+        for cid in pm_company_ids:
+            db.update_yc_hiring_status(cid, is_hiring_pm=True)
+        db.conn.commit()
+
+        typer.echo(f"  Signals found: {len(signals)}")
+        typer.echo(f"  Companies hiring PM: {len(pm_company_ids)}")
+
+        # Show top results
+        if pm_company_ids:
+            typer.echo("\n  Companies with PM signals:")
+            for cid in list(pm_company_ids)[:15]:
+                c = db.get_yc_company_by_id(cid)
+                if c:
+                    typer.echo(f"    {c['batch']:5} {c['company_name']:30} {c.get('website', '')}")
+    finally:
+        db.close()
+
+
+@app.command(name="yc-scrape-founders")
+def yc_scrape_founders(
+    batch: Optional[str] = typer.Option(None, "--batch", "-b", help="Filter by batch"),
+    limit: int = typer.Option(0, "--limit", help="Max companies to scrape (0 = all)"),
+    hiring_only: bool = typer.Option(False, "--hiring-only/--all", help="Only scrape hiring companies"),
+    concurrency: int = typer.Option(10, "--concurrency", help="Concurrent requests"),
+) -> None:
+    """Scrape founder names, titles, LinkedIn & Twitter from YC website pages."""
+    _configure_logging()
+    asyncio.run(_run_yc_scrape_founders(batch, limit, hiring_only, concurrency))
+
+
+async def _run_yc_scrape_founders(
+    batch: Optional[str], limit: int, hiring_only: bool, concurrency: int,
+) -> None:
+    from storage.db import JobDB
+    from yc_startups.founder_scraper import scrape_and_store_founders
+
+    db = JobDB()
+    try:
+        companies = db.get_yc_companies(
+            batch=batch or "",
+            hiring_only=hiring_only,
+            limit=limit,
+        )
+        if not companies:
+            typer.echo("No companies match filters. Run yc-sync first.")
+            return
+
+        typer.echo(f"Scraping founders from {len(companies)} YC company pages...\n")
+        stored = await scrape_and_store_founders(
+            db, companies=companies, max_concurrent=concurrency, limit=limit,
+        )
+        stats = db.get_yc_stats()
+        typer.echo(f"\nDone: {stored} founder contacts scraped and stored")
+        typer.echo(f"Total founders in DB: {stats['total_founders']}")
+    finally:
+        db.close()
+
+
+@app.command(name="yc-enrich-founders")
+def yc_enrich_founders(
+    batch: Optional[str] = typer.Option(None, "--batch", "-b", help="Filter by batch"),
+    limit: int = typer.Option(50, "--limit", help="Max companies to enrich"),
+    hiring_only: bool = typer.Option(True, "--hiring-only/--all", help="Only enrich hiring companies"),
+    dry_run: bool = typer.Option(False, "--dry-run", help="Preview without calling Apollo"),
+) -> None:
+    """Enrich YC founder contacts with verified emails using Apollo (costs credits)."""
+    _configure_logging()
+    asyncio.run(_run_yc_enrich(batch, limit, hiring_only, dry_run))
+
+
+async def _run_yc_enrich(
+    batch: Optional[str], limit: int, hiring_only: bool, dry_run: bool,
+) -> None:
+    from storage.db import JobDB
+    from yc_startups.enricher import enrich_yc_founders
+
+    if not settings.APOLLO_API_KEY:
+        typer.echo("APOLLO_API_KEY not set in .env — cannot enrich founders.", err=True)
+        raise typer.Exit(1)
+
+    db = JobDB()
+    try:
+        companies = db.get_yc_companies(
+            batch=batch or "",
+            hiring_only=hiring_only,
+            limit=limit,
+        )
+        if not companies:
+            typer.echo("No companies match filters. Try --all or sync first.")
+            return
+
+        typer.echo(f"Enriching founders for {len(companies)} YC companies"
+                    f"{' (DRY RUN)' if dry_run else ''}...\n")
+
+        enriched = await enrich_yc_founders(
+            companies, settings, limit=limit, dry_run=dry_run,
+        )
+
+        if not dry_run:
+            for contact in enriched:
+                db.upsert_yc_founder_contact(contact)
+            db.conn.commit()
+
+        verified = sum(1 for e in enriched if e.get("founder_email_verified"))
+        typer.echo(f"\nDone: {len(enriched)} founders enriched, {verified} verified emails")
+    finally:
+        db.close()
+
+
 @app.command()
 def serve(
     port: int = typer.Option(8000, "--port", "-p", help="Port to bind the dashboard server"),

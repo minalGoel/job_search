@@ -9,6 +9,8 @@
 > 3. **[`docs/protocol_to_identify_issues.md`](docs/protocol_to_identify_issues.md)** — seven-phase audit protocol used when auditing a class of bugs. Follow this when the user says "check for bugs" or "audit X" — do NOT start editing files before completing Phase 0–2.
 >
 > After shipping a fix, update `known_edge_cases.md` with the new case and promote patterns into `guidelines_and_learnings.md` when seen more than once.
+>
+> This guidance is mirrored between `AGENTS.md` and `CLAUDE.md` so tools that look for either filename see the same instructions.
 
 ## Project Context
 

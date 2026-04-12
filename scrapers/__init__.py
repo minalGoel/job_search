@@ -27,8 +27,8 @@ SCRAPER_REGISTRY: dict[str, type[BaseScraper]] = {
     "hirist": HiristScraper,
     # Global platforms
     "linkedin": LinkedInScraper,
-    "wellfound": WellfoundScraper,
-    "glassdoor": GlassdoorScraper,
+    # "wellfound": WellfoundScraper,  # DISABLED: mostly US startups, not relevant for Delhi NCR targeting
+    # "glassdoor": GlassdoorScraper,  # DISABLED: low signal for PM roles, Cloudflare blocking issues
     # Remote-first platforms
     "remoteok": RemoteOKScraper,
     "weworkremotely": WeWorkRemotelyScraper,

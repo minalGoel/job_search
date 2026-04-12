@@ -104,6 +104,8 @@ SALARY_SCORES: dict[str, int] = {
 COMPANY_QUALITY_SCORES: dict[str, int] = {
     "mnc": 20,
     "recent_funding": 15,
+    "yc_company": 15,
+    "recent_yc_batch": 10,
     "multiple_pm_roles": 10,
     "direct_source": 10,
     "vc_backed": 10,

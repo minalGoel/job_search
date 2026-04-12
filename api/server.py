@@ -833,6 +833,97 @@ def get_vc_registry() -> list[dict]:
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
+# YC STARTUPS
+# ═══════════════════════════════════════════════════════════════════════════════
+
+
+@app.get("/api/yc/stats")
+def get_yc_stats() -> dict:
+    db = _jobs_db()
+    try:
+        return db.get_yc_stats()
+    finally:
+        db.close()
+
+
+@app.get("/api/yc/batches")
+def get_yc_batches() -> list[str]:
+    db = _jobs_db()
+    try:
+        return db.get_yc_batches()
+    finally:
+        db.close()
+
+
+@app.get("/api/yc/companies")
+def list_yc_companies(
+    page: int = Query(1, ge=1),
+    limit: int = Query(50, ge=1, le=200),
+    batch: str = Query(""),
+    hiring_only: bool = Query(False),
+    hiring_pm_only: bool = Query(False),
+    search: str = Query(""),
+) -> dict:
+    db = _jobs_db()
+    try:
+        total = db.count_yc_companies(
+            batch=batch, hiring_only=hiring_only,
+            hiring_pm_only=hiring_pm_only, search=search,
+        )
+        offset = (page - 1) * limit
+        companies = db.get_yc_companies(
+            batch=batch, hiring_only=hiring_only,
+            hiring_pm_only=hiring_pm_only, search=search,
+            limit=limit, offset=offset,
+        )
+        return {
+            "companies": companies,
+            "total": total,
+            "page": page,
+            "pages": max(1, (total + limit - 1) // limit),
+        }
+    finally:
+        db.close()
+
+
+@app.get("/api/yc/companies/{company_id}")
+def get_yc_company(company_id: str) -> dict:
+    db = _jobs_db()
+    try:
+        company = db.get_yc_company_by_id(company_id)
+        if not company:
+            raise HTTPException(404, "YC company not found")
+        signals = db.get_yc_hiring_signals(company_id)
+        founders = db.get_yc_founder_contacts(company_id)
+        return {"company": company, "signals": signals, "founders": founders}
+    finally:
+        db.close()
+
+
+@app.get("/api/yc/founders")
+def list_yc_founders() -> list[dict]:
+    db = _jobs_db()
+    try:
+        return db.get_yc_all_founder_contacts()
+    finally:
+        db.close()
+
+
+@app.post("/api/yc/sync")
+async def trigger_yc_sync(batch: Optional[str] = Query(None)) -> dict:
+    """Trigger YC sync as a background subprocess."""
+    args = [PYTHON, MAIN_PY, "yc-sync"]
+    if batch:
+        args.extend(["--batch", batch])
+    proc = await asyncio.create_subprocess_exec(
+        *args, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.STDOUT, cwd=str(ROOT),
+    )
+    stdout, _ = await proc.communicate()
+    output = stdout.decode(errors="replace") if stdout else ""
+    return {"status": "ok" if proc.returncode == 0 else "error", "output": output[-1000:]}
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
 # ANALYTICS
 # ═══════════════════════════════════════════════════════════════════════════════
 

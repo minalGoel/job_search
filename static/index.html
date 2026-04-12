@@ -643,6 +643,10 @@ body::after {
     <div class="nav-item" data-screen="funding" onclick="navigate('funding')">
       <span>📈</span> Funded Cos
     </div>
+    <div class="nav-item" data-screen="yc" onclick="navigate('yc')">
+      <span>🚀</span> YC Startups
+      <span class="badge" id="badge-yc"></span>
+    </div>
     <div style="padding:10px 16px 5px;font-size:9px;font-weight:600;color:var(--sb-section-cl);letter-spacing:.12em;text-transform:uppercase;font-family:'JetBrains Mono',monospace;margin-top:4px">Insights</div>
     <div class="nav-item" data-screen="analytics" onclick="navigate('analytics')">
       <span>🔬</span> Analytics
@@ -864,6 +868,67 @@ body::after {
   </div>
 </div>
 
+<!-- ════════════ YC STARTUPS ═════════════════ -->
+<div id="screen-yc" class="screen">
+  <div class="topbar">
+    <div>
+      <h1>YC Startups</h1>
+      <p id="yc-subtitle">Loading...</p>
+    </div>
+    <div style="display:flex;gap:8px;align-items:center">
+      <select id="yc-batch-filter" onchange="loadYC()" style="font-size:12px;padding:5px 8px;border:1px solid var(--br);border-radius:6px;background:var(--card);color:var(--t1);font-family:'DM Sans',sans-serif">
+        <option value="">All Batches</option>
+      </select>
+      <select id="yc-hiring-filter" onchange="loadYC()" style="font-size:12px;padding:5px 8px;border:1px solid var(--br);border-radius:6px;background:var(--card);color:var(--t1);font-family:'DM Sans',sans-serif">
+        <option value="">All Companies</option>
+        <option value="hiring">Hiring</option>
+        <option value="hiring_pm">Hiring PM</option>
+      </select>
+      <input id="yc-search" type="text" placeholder="Search companies..." oninput="clearTimeout(window._ycST);window._ycST=setTimeout(()=>loadYC(),300)" style="font-size:12px;padding:5px 10px;border:1px solid var(--br);border-radius:6px;background:var(--card);color:var(--t1);width:180px;font-family:'DM Sans',sans-serif"/>
+      <button class="btn-primary btn-sm" onclick="syncYC()">
+        <svg width="13" height="13" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8 8 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/></svg>
+        Sync YC
+      </button>
+    </div>
+  </div>
+  <div style="flex:1;overflow-y:auto;padding:20px 24px">
+    <!-- KPI row -->
+    <div id="yc-stats-row" style="display:grid;grid-template-columns:repeat(6,1fr);gap:12px;margin-bottom:20px">
+      <div class="stat-card" style="--sc-acc:var(--acc);--sc-col:var(--acc)"><div class="lbl">Total</div><div class="val" id="yc-stat-total">—</div></div>
+      <div class="stat-card" style="--sc-acc:var(--grn);--sc-col:var(--grn)"><div class="lbl">Active</div><div class="val" id="yc-stat-active">—</div></div>
+      <div class="stat-card" style="--sc-acc:var(--blu);--sc-col:var(--blu)"><div class="lbl">Hiring</div><div class="val" id="yc-stat-hiring">—</div></div>
+      <div class="stat-card" style="--sc-acc:var(--pur);--sc-col:var(--pur)"><div class="lbl">Hiring PM</div><div class="val" id="yc-stat-pm">—</div></div>
+      <div class="stat-card" style="--sc-acc:var(--amb);--sc-col:var(--amb)"><div class="lbl">Founders</div><div class="val" id="yc-stat-founders">—</div></div>
+      <div class="stat-card" style="--sc-acc:var(--org);--sc-col:var(--org)"><div class="lbl">Verified Emails</div><div class="val" id="yc-stat-emails">—</div></div>
+    </div>
+    <!-- Company table -->
+    <div style="background:var(--card);border:1px solid var(--br);border-radius:12px;overflow:hidden;box-shadow:0 1px 3px rgba(0,0,0,0.05)">
+      <table class="data-table">
+        <thead><tr>
+          <th>Company</th><th>Batch</th><th>Industry</th><th>Location</th>
+          <th>Team</th><th>Status</th><th>Hiring</th><th>Founders</th><th>Action</th>
+        </tr></thead>
+        <tbody id="yc-tbody">
+          <tr><td colspan="9" style="text-align:center;padding:40px;color:var(--t3)">Click "Sync YC" to fetch the directory</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <!-- Pagination -->
+    <div id="yc-pagination" style="display:flex;justify-content:center;align-items:center;gap:12px;margin-top:16px;font-size:12px;color:var(--t2)"></div>
+  </div>
+</div>
+
+<!-- YC Founder Detail Modal -->
+<div id="yc-modal" style="display:none;position:fixed;inset:0;z-index:100;background:rgba(0,0,0,0.4);backdrop-filter:blur(4px);align-items:center;justify-content:center">
+  <div style="background:var(--card);border-radius:16px;max-width:640px;width:90%;max-height:80vh;overflow-y:auto;padding:28px;box-shadow:0 20px 40px rgba(0,0,0,0.15)">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px">
+      <h2 id="yc-modal-title" style="font-family:'Syne',sans-serif;font-size:18px;color:var(--t1)"></h2>
+      <button onclick="document.getElementById('yc-modal').style.display='none'" style="background:none;border:none;font-size:18px;cursor:pointer;color:var(--t3)">✕</button>
+    </div>
+    <div id="yc-modal-body"></div>
+  </div>
+</div>
+
 <!-- ════════════ ANALYTICS ═══════════════════ -->
 <div id="screen-analytics" class="screen">
   <div class="topbar">
@@ -1009,7 +1074,7 @@ function navigate(screen) {
   document.getElementById(`screen-${screen}`).classList.add('active');
   document.querySelector(`[data-screen="${screen}"]`).classList.add('active');
   STATE.currentScreen = screen;
-  const loaders = { dashboard:loadDashboard, jobs:loadJobs, tracker:loadTracker, outreach:loadOutreach, scrapers:loadScrapers, vc:loadVC, funding:loadFunding, analytics:loadAnalytics };
+  const loaders = { dashboard:loadDashboard, jobs:loadJobs, tracker:loadTracker, outreach:loadOutreach, scrapers:loadScrapers, vc:loadVC, funding:loadFunding, yc:loadYC, analytics:loadAnalytics };
   if (loaders[screen]) loaders[screen]();
 }
 
@@ -1674,6 +1739,212 @@ async function loadFunding() {
       </tr>`;
     }).join('');
   } catch(e) { tbody.innerHTML=`<tr><td colspan="8" style="text-align:center;padding:30px;color:var(--red)">Error: ${e.message}</td></tr>`; }
+}
+
+// ═══════════════════════════════════════════════════
+// YC STARTUPS
+// ═══════════════════════════════════════════════════
+
+let _ycPage = 1;
+let _ycBatchesLoaded = false;
+
+async function loadYC(page) {
+  if (page) _ycPage = page;
+  const tbody = document.getElementById('yc-tbody');
+  const batch = document.getElementById('yc-batch-filter').value;
+  const hiringFilter = document.getElementById('yc-hiring-filter').value;
+  const search = (document.getElementById('yc-search').value||'').trim();
+
+  try {
+    // Load batches dropdown once
+    if (!_ycBatchesLoaded) {
+      try {
+        const batches = await GET('/api/yc/batches');
+        const sel = document.getElementById('yc-batch-filter');
+        batches.forEach(b => { const o = document.createElement('option'); o.value = b; o.textContent = b; sel.appendChild(o); });
+        _ycBatchesLoaded = true;
+      } catch(e) { /* batches optional */ }
+    }
+
+    // Build query
+    let q = `/api/yc/companies?page=${_ycPage}&limit=50`;
+    if (batch) q += `&batch=${encodeURIComponent(batch)}`;
+    if (hiringFilter === 'hiring') q += '&hiring_only=true';
+    if (hiringFilter === 'hiring_pm') q += '&hiring_pm_only=true';
+    if (search) q += `&search=${encodeURIComponent(search)}`;
+
+    const [data, stats] = await Promise.all([GET(q), GET('/api/yc/stats')]);
+
+    // Update stats
+    document.getElementById('yc-subtitle').textContent = `${stats.total_companies.toLocaleString()} companies · ${stats.hiring_pm} hiring PM · ${stats.verified_emails} verified emails`;
+    document.getElementById('yc-stat-total').textContent = stats.total_companies.toLocaleString();
+    document.getElementById('yc-stat-active').textContent = stats.active_companies.toLocaleString();
+    document.getElementById('yc-stat-hiring').textContent = stats.hiring_companies.toLocaleString();
+    document.getElementById('yc-stat-pm').textContent = stats.hiring_pm.toLocaleString();
+    document.getElementById('yc-stat-founders').textContent = stats.total_founders.toLocaleString();
+    document.getElementById('yc-stat-emails').textContent = stats.verified_emails.toLocaleString();
+    document.getElementById('badge-yc').textContent = stats.hiring_pm > 0 ? stats.hiring_pm : '';
+
+    if (!data.companies?.length) {
+      tbody.innerHTML = `<tr><td colspan="9"><div class="empty"><div class="icon">🚀</div><div class="title">No YC companies yet</div><div class="sub">Click "Sync YC" to fetch the directory</div></div></td></tr>`;
+      document.getElementById('yc-pagination').innerHTML = '';
+      return;
+    }
+
+    tbody.innerHTML = data.companies.map(c => {
+      const hiringBadge = c.is_hiring_pm
+        ? `<span class="chip" style="background:${DS.pur}15;color:${DS.pur};border:1px solid ${DS.pur}40">PM Hiring</span>`
+        : c.is_hiring
+          ? `<span class="chip" style="background:${DS.grn}15;color:${DS.grn};border:1px solid ${DS.grn}40">Hiring</span>`
+          : `<span style="font-size:11px;color:var(--t3)">—</span>`;
+
+      const statusColor = c.status === 'Active' ? DS.grn : c.status === 'Public' ? DS.blu : c.status === 'Acquired' ? DS.amb : DS.neu;
+      const founderNames = (c.founders||[]).slice(0,2).map(f=>f.name||f).join(', ') || '—';
+      const founderCount = (c.founders||[]).length;
+
+      return `<tr class="row-hover">
+        <td>
+          <div style="display:flex;align-items:center;gap:8px">
+            ${c.logo_url ? `<img src="${c.logo_url}" style="width:20px;height:20px;border-radius:4px;object-fit:contain" onerror="this.style.display='none'"/>` : ''}
+            <div>
+              <div style="font-size:12px;font-weight:500;color:var(--t1)">${c.company_name}</div>
+              <div style="font-size:10px;color:var(--t3);max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${c.description||''}</div>
+            </div>
+          </div>
+        </td>
+        <td><span class="chip" style="background:${DS.acc}15;color:${DS.acc};border:1px solid ${DS.acc}40;font-family:'JetBrains Mono',monospace;font-size:10px">${c.batch||'—'}</span></td>
+        <td style="font-size:11px;color:var(--t2)">${c.industry||'—'}</td>
+        <td style="font-size:11px;color:var(--t2)">${c.hq_location||'—'}</td>
+        <td style="font-size:11px;color:var(--t3);font-family:'JetBrains Mono',monospace">${c.team_size||'—'}</td>
+        <td><span style="font-size:10px;color:${statusColor};font-weight:600">${c.status||'—'}</span></td>
+        <td>${hiringBadge}</td>
+        <td style="font-size:11px;color:var(--t2)">${founderNames}${founderCount>2?` +${founderCount-2}`:''}</td>
+        <td style="white-space:nowrap">
+          <button class="btn-ghost btn-sm" onclick="showYCDetail('${c.id}')" style="font-size:10px">Detail</button>
+          ${c.website?`<a href="${c.website}" target="_blank" class="btn-ghost btn-sm" style="font-size:10px;text-decoration:none">Site ↗</a>`:''}
+          <a href="https://www.ycombinator.com/companies/${c.company_slug}" target="_blank" class="btn-ghost btn-sm" style="font-size:10px;text-decoration:none;color:${DS.org}">YC ↗</a>
+        </td>
+      </tr>`;
+    }).join('');
+
+    // Pagination
+    const pgEl = document.getElementById('yc-pagination');
+    if (data.pages > 1) {
+      let pg = '';
+      if (_ycPage > 1) pg += `<button class="btn-ghost btn-sm" onclick="loadYC(${_ycPage-1})">← Prev</button>`;
+      pg += `<span>Page ${data.page} of ${data.pages} (${data.total.toLocaleString()} companies)</span>`;
+      if (_ycPage < data.pages) pg += `<button class="btn-ghost btn-sm" onclick="loadYC(${_ycPage+1})">Next →</button>`;
+      pgEl.innerHTML = pg;
+    } else {
+      pgEl.innerHTML = data.total > 0 ? `<span>${data.total.toLocaleString()} companies</span>` : '';
+    }
+
+  } catch(e) {
+    tbody.innerHTML = `<tr><td colspan="9" style="text-align:center;padding:30px;color:var(--red)">Error: ${e.message}</td></tr>`;
+  }
+}
+
+async function showYCDetail(companyId) {
+  const modal = document.getElementById('yc-modal');
+  const title = document.getElementById('yc-modal-title');
+  const body = document.getElementById('yc-modal-body');
+  modal.style.display = 'flex';
+  title.textContent = 'Loading...';
+  body.innerHTML = '';
+
+  try {
+    const data = await GET(`/api/yc/companies/${companyId}`);
+    const c = data.company;
+    const founders = data.founders || [];
+    const signals = data.signals || [];
+
+    title.textContent = `${c.company_name} (${c.batch})`;
+
+    let html = `
+      <div style="margin-bottom:16px">
+        <div style="font-size:13px;color:var(--t2);margin-bottom:8px">${c.description||''}</div>
+        ${c.long_description?`<div style="font-size:12px;color:var(--t3);margin-bottom:8px">${c.long_description}</div>`:''}
+        <div style="display:flex;gap:16px;flex-wrap:wrap;font-size:11px;color:var(--t3);align-items:center">
+          ${c.website?`<a href="${c.website}" target="_blank" style="color:var(--acc)">Website ↗</a>`:''}
+          <a href="https://www.ycombinator.com/companies/${c.company_slug}" target="_blank" style="color:${DS.org};font-weight:600">YC Page ↗</a>
+          <span>Industry: ${c.industry||'—'}</span>
+          <span>Location: ${c.hq_location||'—'}</span>
+          <span>Team: ${c.team_size||'—'}</span>
+          <span>Status: ${c.status||'—'}</span>
+        </div>
+      </div>`;
+
+    // Founders section
+    html += `<div class="sec-label" style="margin-top:16px">Founders (${(c.founders||[]).length})</div>`;
+    const allFounders = [...(c.founders||[])];
+    // Merge enriched data
+    for (const ef of founders) {
+      const existing = allFounders.find(f => (f.name||'').toLowerCase() === (ef.founder_name||'').toLowerCase());
+      if (existing) {
+        existing.email = ef.founder_email || '';
+        existing.email_verified = ef.founder_email_verified;
+        existing.linkedin = existing.linkedin || ef.founder_linkedin || '';
+        existing.enrichment_source = ef.enrichment_source || '';
+      } else {
+        allFounders.push({
+          name: ef.founder_name, title: ef.founder_title,
+          email: ef.founder_email, email_verified: ef.founder_email_verified,
+          linkedin: ef.founder_linkedin, twitter: ef.founder_twitter,
+          enrichment_source: ef.enrichment_source,
+        });
+      }
+    }
+
+    if (allFounders.length) {
+      html += `<div style="display:grid;gap:8px;margin-top:8px">`;
+      for (const f of allFounders) {
+        const verifiedBadge = f.email_verified ? `<span style="font-size:9px;color:${DS.grn};font-weight:600">✓ verified</span>` : '';
+        html += `<div style="padding:10px 14px;background:var(--card2);border-radius:8px;border:1px solid var(--br)">
+          <div style="display:flex;justify-content:space-between;align-items:center">
+            <div>
+              <span style="font-size:13px;font-weight:500;color:var(--t1)">${f.name||'—'}</span>
+              <span style="font-size:11px;color:var(--t3);margin-left:8px">${f.title||'Founder'}</span>
+            </div>
+          </div>
+          <div style="display:flex;gap:8px;margin-top:6px;font-size:11px;align-items:center;flex-wrap:wrap">
+            ${f.linkedin?`<a href="${f.linkedin}" target="_blank" style="display:inline-flex;align-items:center;gap:4px;padding:3px 10px;border-radius:5px;background:${DS.blu}12;color:${DS.blu};border:1px solid ${DS.blu}35;font-weight:600;text-decoration:none;font-size:11px">LinkedIn ↗</a>`:''}
+            ${f.twitter?`<a href="${f.twitter}" target="_blank" style="display:inline-flex;align-items:center;gap:4px;padding:3px 10px;border-radius:5px;background:var(--neug);color:var(--t2);border:1px solid var(--br);text-decoration:none;font-size:11px">Twitter ↗</a>`:''}
+            ${f.email?`<span style="color:var(--acc);font-family:'JetBrains Mono',monospace;font-size:11px">${f.email}</span>`:''}
+            ${verifiedBadge}
+          </div>
+        </div>`;
+      }
+      html += `</div>`;
+    } else {
+      html += `<div style="font-size:12px;color:var(--t3);padding:8px 0">No founder data — run "yc-scrape-founders" to fetch from YC</div>`;
+    }
+
+    // Signals section
+    if (signals.length) {
+      html += `<div class="sec-label" style="margin-top:20px">Hiring Signals (${signals.length})</div>`;
+      html += `<div style="display:grid;gap:6px;margin-top:8px">`;
+      const sigColor = { scraped_job:DS.grn, yc_api_flag:DS.blu, careers_page:DS.amb };
+      for (const s of signals) {
+        const col = sigColor[s.signal_type] || DS.neu;
+        html += `<div style="padding:8px 12px;background:${col}08;border-left:3px solid ${col};border-radius:0 6px 6px 0;font-size:11px">
+          <span style="color:${col};font-weight:600;font-family:'JetBrains Mono',monospace;font-size:10px">${s.signal_type}</span>
+          <span style="color:var(--t2);margin-left:8px">${s.signal_detail}</span>
+          <span style="color:var(--t3);margin-left:8px;font-size:10px">${s.checked_at?fmtDate(s.checked_at):''}</span>
+        </div>`;
+      }
+      html += `</div>`;
+    }
+
+    body.innerHTML = html;
+  } catch(e) {
+    title.textContent = 'Error';
+    body.innerHTML = `<div style="color:var(--red)">${e.message}</div>`;
+  }
+}
+
+function syncYC() {
+  runCommand('yc-sync');
+  toast('YC sync started — check console', 'info');
 }
 
 // ═══════════════════════════════════════════════════

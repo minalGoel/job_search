@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 import asyncio
-import json
 import re
+import xml.etree.ElementTree as ET
 from datetime import date, datetime, timedelta
+from email.utils import parsedate_to_datetime
 from typing import Any
 
+import httpx
 import structlog
 from bs4 import BeautifulSoup
 from playwright.async_api import Page
@@ -130,68 +132,65 @@ class FundingScanner:
         return deduped
 
     # ------------------------------------------------------------------
-    # Inc42
+    # Inc42  (RSS — no Playwright needed; Gatsby SPA returns empty shell)
     # ------------------------------------------------------------------
     async def _scan_inc42(self) -> list[FundedCompany]:
-        """Scrape Inc42 funding news."""
+        """Fetch Inc42 funding news via RSS feed (more reliable than Playwright on SPA)."""
         companies: list[FundedCompany] = []
-        urls = [
-            "https://inc42.com/tag/funding/",
-            "https://inc42.com/tag/series-a/",
-            "https://inc42.com/tag/series-b/",
-        ]
-        for url in urls:
-            try:
-                page = await self._get_page(url)
-                html = await page.content()
-                soup = BeautifulSoup(html, "html.parser")
+        rss_url = "https://inc42.com/feed/"
+        funding_kws = ["raises", "funding", "secures", "bags", "series", "round",
+                       "crore", "million", "investment", "backed", "nabs", "lands",
+                       "closes", "gets", "receives"]
+        try:
+            async with httpx.AsyncClient(
+                headers={"User-Agent": "Mozilla/5.0"},
+                follow_redirects=True,
+                timeout=15,
+            ) as client:
+                resp = await client.get(rss_url)
+                resp.raise_for_status()
 
-                articles = soup.select("article, div[class*='post-card'], div[class*='article']")
-                self._log.info("inc42.articles", count=len(articles), url=url)
+            root = ET.fromstring(resp.text)
+            items = root.findall(".//item")
+            self._log.info("inc42.rss_items", count=len(items))
 
-                for article in articles[:20]:
-                    try:
-                        title_el = article.select_one("h2 a, h3 a, a[class*='title']")
-                        if not title_el:
-                            continue
-                        title = title_el.get_text(strip=True)
-                        link = title_el.get("href", "")
+            cutoff = date.today() - timedelta(days=LOOKBACK_DAYS)
+            for item in items:
+                try:
+                    title = item.findtext("title", "").strip()
+                    link = item.findtext("link", "").strip()
+                    pub_date_str = item.findtext("pubDate", "")
 
-                        # Filter for funding articles
-                        title_lower = title.lower()
-                        if not any(kw in title_lower for kw in ["raises", "funding", "secures", "bags", "series", "round"]):
-                            continue
+                    article_date: date | None = None
+                    if pub_date_str:
+                        try:
+                            article_date = parsedate_to_datetime(pub_date_str).date()
+                        except Exception:
+                            article_date = _parse_date_from_text(pub_date_str)
 
-                        date_el = article.select_one("time, span[class*='date']")
-                        article_date = None
-                        if date_el:
-                            date_text = date_el.get("datetime", "") or date_el.get_text(strip=True)
-                            article_date = _parse_date_from_text(date_text)
+                    if article_date and article_date < cutoff:
+                        continue
 
-                        # Skip if older than 6 months
-                        cutoff = date.today() - timedelta(days=LOOKBACK_DAYS)
-                        if article_date and article_date < cutoff:
-                            continue
+                    title_lower = title.lower()
+                    if not any(kw in title_lower for kw in funding_kws):
+                        continue
 
-                        # Extract company name from title (usually "X Raises $YM...")
-                        company_name = self._extract_company_from_title(title)
-                        amount = _extract_amount(title)
-                        series = _extract_series(title)
+                    company_name = self._extract_company_from_title(title)
+                    if not company_name:
+                        continue
 
-                        if company_name:
-                            companies.append(FundedCompany(
-                                company=company_name,
-                                last_round_date=article_date,
-                                last_round_series=series,
-                                amount_raised=amount,
-                                source_url=link,
-                            ))
-                    except Exception:
-                        self._log.exception("inc42.article_failed")
+                    companies.append(FundedCompany(
+                        company=company_name,
+                        last_round_date=article_date,
+                        last_round_series=_extract_series(title),
+                        amount_raised=_extract_amount(title),
+                        source_url=link,
+                    ))
+                except Exception:
+                    self._log.exception("inc42.item_failed")
 
-                await page.close()
-            except Exception:
-                self._log.exception("inc42.page_failed", url=url)
+        except Exception:
+            self._log.exception("inc42.rss_failed", url=rss_url)
 
         return companies
 
@@ -202,21 +201,31 @@ class FundingScanner:
         """Scrape YourStory funding news."""
         companies: list[FundedCompany] = []
         url = "https://yourstory.com/category/funding"
+        funding_kws = ["raises", "funding", "secures", "bags", "series", "round", "investment", "crore", "million"]
         try:
             page = await self._get_page(url)
+            # Wait longer for React/Next.js SPA to render article cards
+            try:
+                await page.wait_for_selector("article, [class*='story'], [class*='article-card'], h2 a, h3 a", timeout=10_000)
+            except Exception:
+                pass
             await asyncio.sleep(3)
             html = await page.content()
             soup = BeautifulSoup(html, "html.parser")
 
-            articles = soup.select(
-                "article, div[class*='story-card'], div[class*='post'], "
-                "a[class*='story']"
+            # Try multiple selector strategies
+            articles = (
+                soup.select("article")
+                or soup.select("[class*='story-card']")
+                or soup.select("[class*='article-card']")
+                or soup.select("[class*='post-card']")
+                or soup.select("a[href*='/funding/']")
             )
             self._log.info("yourstory.articles", count=len(articles))
 
             for article in articles[:30]:
                 try:
-                    title_el = article.select_one("h2, h3, span[class*='title']")
+                    title_el = article.select_one("h2, h3, h4, [class*='title']")
                     if not title_el:
                         link_el = article if article.name == "a" else article.select_one("a")
                         title = link_el.get_text(strip=True) if link_el else ""
@@ -229,10 +238,10 @@ class FundingScanner:
                         link = f"https://yourstory.com{link}"
 
                     title_lower = title.lower()
-                    if not any(kw in title_lower for kw in ["raises", "funding", "secures", "bags", "series", "round", "investment"]):
+                    if not title or not any(kw in title_lower for kw in funding_kws):
                         continue
 
-                    date_el = article.select_one("time, span[class*='date']")
+                    date_el = article.select_one("time, [class*='date'], [class*='time']")
                     article_date = _parse_date_from_text(
                         date_el.get("datetime", "") or date_el.get_text(strip=True)
                     ) if date_el else None
@@ -263,33 +272,50 @@ class FundingScanner:
         return companies
 
     # ------------------------------------------------------------------
-    # Entrackr
+    # Entrackr  (Playwright — SPA with wait for JS render)
     # ------------------------------------------------------------------
     async def _scan_entrackr(self) -> list[FundedCompany]:
         """Scrape Entrackr funding news."""
         companies: list[FundedCompany] = []
         url = "https://entrackr.com/category/funding/"
+        funding_kws = ["raises", "funding", "secures", "bags", "series", "round", "crore", "million"]
         try:
             page = await self._get_page(url)
+            try:
+                await page.wait_for_selector("article, h2 a, h3 a, [class*='post-title']", timeout=10_000)
+            except Exception:
+                pass
+            await asyncio.sleep(3)
             html = await page.content()
             soup = BeautifulSoup(html, "html.parser")
 
-            articles = soup.select("article, div[class*='post'], div[class*='entry']")
+            articles = (
+                soup.select("article")
+                or soup.select("[class*='post-item']")
+                or soup.select("[class*='story-card']")
+                or soup.select("h2 a, h3 a")
+            )
             self._log.info("entrackr.articles", count=len(articles))
 
             for article in articles[:20]:
                 try:
-                    title_el = article.select_one("h2 a, h3 a, a[class*='title']")
-                    if not title_el:
-                        continue
-                    title = title_el.get_text(strip=True)
-                    link = title_el.get("href", "")
+                    # For bare anchor elements, the element IS the link+title
+                    if article.name == "a":
+                        title = article.get_text(strip=True)
+                        link = article.get("href", "")
+                    else:
+                        title_el = article.select_one("h2 a, h3 a, h2, h3, [class*='title']")
+                        if not title_el:
+                            continue
+                        title = title_el.get_text(strip=True)
+                        link_el = title_el if title_el.name == "a" else title_el.select_one("a[href]")
+                        link = link_el.get("href", "") if link_el else ""
 
                     title_lower = title.lower()
-                    if not any(kw in title_lower for kw in ["raises", "funding", "secures", "bags", "series"]):
+                    if not title or not any(kw in title_lower for kw in funding_kws):
                         continue
 
-                    date_el = article.select_one("time, span[class*='date']")
+                    date_el = article.select_one("time, [class*='date'], [class*='time']")
                     article_date = _parse_date_from_text(
                         date_el.get("datetime", "") or date_el.get_text(strip=True)
                     ) if date_el else None
@@ -299,17 +325,16 @@ class FundingScanner:
                         continue
 
                     company_name = self._extract_company_from_title(title)
-                    amount = _extract_amount(title)
-                    series = _extract_series(title)
+                    if not company_name:
+                        continue
 
-                    if company_name:
-                        companies.append(FundedCompany(
-                            company=company_name,
-                            last_round_date=article_date,
-                            last_round_series=series,
-                            amount_raised=amount,
-                            source_url=link,
-                        ))
+                    companies.append(FundedCompany(
+                        company=company_name,
+                        last_round_date=article_date,
+                        last_round_series=_extract_series(title),
+                        amount_raised=_extract_amount(title),
+                        source_url=link,
+                    ))
                 except Exception:
                     self._log.exception("entrackr.article_failed")
 
@@ -320,39 +345,54 @@ class FundingScanner:
         return companies
 
     # ------------------------------------------------------------------
-    # VCCircle
+    # VCCircle  (Playwright — SPA with wait for JS render)
     # ------------------------------------------------------------------
     async def _scan_vccircle(self) -> list[FundedCompany]:
         """Scrape VCCircle funding news."""
         companies: list[FundedCompany] = []
         url = "https://www.vccircle.com/deals"
+        funding_kws = ["raises", "funding", "secures", "bags", "series", "round", "investment", "acqui"]
         try:
             page = await self._get_page(url)
+            try:
+                await page.wait_for_selector("article, h2 a, h3 a, [class*='deal'], [class*='headline']", timeout=10_000)
+            except Exception:
+                pass
             await asyncio.sleep(3)
             html = await page.content()
             soup = BeautifulSoup(html, "html.parser")
 
-            articles = soup.select(
-                "article, div[class*='deal-card'], div[class*='story'], "
-                "div[class*='post'], li[class*='deal']"
+            articles = (
+                soup.select("article")
+                or soup.select("[class*='deal-card']")
+                or soup.select("[class*='story-item']")
+                or soup.select("[class*='post-item']")
+                or soup.select("h2 a, h3 a")
             )
             self._log.info("vccircle.articles", count=len(articles))
 
             for article in articles[:20]:
                 try:
-                    title_el = article.select_one("h2 a, h3 a, a[class*='title'], a[class*='headline']")
-                    if not title_el:
-                        continue
-                    title = title_el.get_text(strip=True)
-                    link = title_el.get("href", "")
-                    if link and not link.startswith("http"):
-                        link = f"https://www.vccircle.com{link}"
+                    if article.name == "a":
+                        title = article.get_text(strip=True)
+                        link = article.get("href", "")
+                        if link and not link.startswith("http"):
+                            link = f"https://www.vccircle.com{link}"
+                    else:
+                        title_el = article.select_one("h2 a, h3 a, h2, h3, [class*='title'], [class*='headline']")
+                        if not title_el:
+                            continue
+                        title = title_el.get_text(strip=True)
+                        link_el = title_el if title_el.name == "a" else title_el.select_one("a[href]")
+                        link = link_el.get("href", "") if link_el else ""
+                        if link and not link.startswith("http"):
+                            link = f"https://www.vccircle.com{link}"
 
                     title_lower = title.lower()
-                    if not any(kw in title_lower for kw in ["raises", "funding", "secures", "bags", "series", "round"]):
+                    if not title or not any(kw in title_lower for kw in funding_kws):
                         continue
 
-                    date_el = article.select_one("time, span[class*='date']")
+                    date_el = article.select_one("time, [class*='date'], [class*='time']")
                     article_date = _parse_date_from_text(
                         date_el.get("datetime", "") or date_el.get_text(strip=True)
                     ) if date_el else None
@@ -362,17 +402,16 @@ class FundingScanner:
                         continue
 
                     company_name = self._extract_company_from_title(title)
-                    amount = _extract_amount(title)
-                    series = _extract_series(title)
+                    if not company_name:
+                        continue
 
-                    if company_name:
-                        companies.append(FundedCompany(
-                            company=company_name,
-                            last_round_date=article_date,
-                            last_round_series=series,
-                            amount_raised=amount,
-                            source_url=link,
-                        ))
+                    companies.append(FundedCompany(
+                        company=company_name,
+                        last_round_date=article_date,
+                        last_round_series=_extract_series(title),
+                        amount_raised=_extract_amount(title),
+                        source_url=link,
+                    ))
                 except Exception:
                     self._log.exception("vccircle.article_failed")
 

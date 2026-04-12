@@ -1,225 +1,224 @@
-# CLAUDE.md — Job Search Aggregator
+# AGENTS.md — Agent Guidelines for Job Search Aggregator
 
-> **⚠ REQUIRED READING BEFORE WRITING CODE ⚠**
+> **⚠ MANDATORY READING BEFORE ANY CODE CHANGE ⚠**
 >
-> These three files in `docs/` are mandatory reading before touching scrapers, scoring, outreach, or API code. They encode every production bug that has shipped from this repo and the protocol to prevent recurrence.
+> Every agent that writes code in this repo must first read the three protocol files in `docs/`:
 >
-> - **[`docs/known_edge_cases.md`](docs/known_edge_cases.md)** — catalogue of data shapes, API quirks, and runtime scenarios that have broken naive implementations (location parsing, field-mapping bugs, resource leaks, dedup hash collisions, status vocabulary drift, ...). Every item is backed by a real bug with file + line references.
-> - **[`docs/guidelines_and_learnings.md`](docs/guidelines_and_learnings.md)** — codified principles derived from the bugs above. Covers single-source-of-truth patterns, defense-in-depth filters, `try/finally` + sentinel resource management, `COALESCE` for partial SQL updates, token-bucket rate limiters, documentation–code drift detection.
-> - **[`docs/protocol_to_identify_issues.md`](docs/protocol_to_identify_issues.md)** — repeatable seven-phase audit protocol for finding classes of bugs (parallel grep hunt → verify sub-agents personally → run filter against existing data → three-layer verification: compile + behavioural + E2E).
+> 1. **[`docs/known_edge_cases.md`](docs/known_edge_cases.md)** — data shapes, API quirks, and runtime scenarios that have broken naive implementations (with file + line references). Use this as a lookup when designing new scrapers, API endpoints, or scoring logic.
+> 2. **[`docs/guidelines_and_learnings.md`](docs/guidelines_and_learnings.md)** — 18 codified principles (single source of truth, defense in depth, `try/finally` + sentinel, `COALESCE` for partial updates, token-bucket rate limiters, etc.).
+> 3. **[`docs/protocol_to_identify_issues.md`](docs/protocol_to_identify_issues.md)** — seven-phase audit protocol used when auditing a class of bugs. Follow this when the user says "check for bugs" or "audit X" — do NOT start editing files before completing Phase 0–2.
 >
-> **Rule:** When a new non-trivial bug is found, add the edge case to `known_edge_cases.md` and — if it's the Nth instance of a pattern — promote the rule into `guidelines_and_learnings.md`.
+> After shipping a fix, update `known_edge_cases.md` with the new case and promote patterns into `guidelines_and_learnings.md` when seen more than once.
+>
+> This guidance is mirrored between `AGENTS.md` and `CLAUDE.md` so tools that look for either filename see the same instructions.
 
-## Project Overview
+## Project Context
 
-A Python CLI tool that aggregates Senior Product Manager roles from 14 job platforms, scans VC portfolio job boards, US MNC career pages, tracks recently funded Indian startups, and runs automated outreach campaigns. Designed for a PM job seeker targeting Delhi NCR, 5-7 years experience, 40+ LPA, Tech/SaaS/B2B.
+This is a Python async CLI tool for aggregating PM job listings across 14 platforms, VC portals, MNC career pages, funding trackers, and automated email outreach. The user is a Senior PM candidate targeting Delhi NCR, 5-7 yrs exp, 40+ LPA, Tech/SaaS/B2B.
 
-## Architecture
+## Agent Roles
 
-```
-job_search/
-├── main.py                        # Typer CLI entrypoint (all commands below)
-├── config/
-│   ├── __init__.py
-│   ├── settings.py                # Pydantic-settings: SMTP, Apollo, Gmail, schedule, paths (loads .env)
-│   └── search_params.py           # SearchParams dataclass: titles, location, experience, CTC
-├── models/
-│   ├── __init__.py
-│   └── job.py                     # Pydantic Job model (shared by all scrapers), auto-computed id + dedup_hash
-├── scrapers/
-│   ├── __init__.py                # SCRAPER_REGISTRY dict mapping name -> class (14 scrapers)
-│   ├── base.py                    # Abstract BaseScraper: _get_page(), _safe_scrape()
-│   ├── naukri.py                  # XHR JSON API interception + HTML fallback
-│   ├── iimjobs.py                 # Server-rendered HTML
-│   ├── foundit.py                 # JSON API interception + HTML fallback
-│   ├── indeed.py                  # HTML scraping with stealth
-│   ├── cutshort.py                # React SPA, XHR interception, login-gated
-│   ├── wellfound.py               # React SPA, Playwright render
-│   ├── linkedin.py                # Guest search, stealth, max 3 pages, auth-wall detection
-│   ├── instahyre.py               # Login-gated, cookie-based, session expiry detection
-│   ├── glassdoor.py               # BEST EFFORT (Cloudflare), graceful degradation
-│   ├── hirist.py                  # HTML scraping (sister of IIMJobs)
-│   ├── remoteok.py                # Free JSON API (httpx, no Playwright needed)
-│   ├── weworkremotely.py          # RSS feed parsing (httpx + xml.etree, no Playwright)
-│   ├── ycombinator.py             # YC public job listing pages
-│   └── weekday.py                 # Login-gated SPA, API interception
-├── browser/
-│   ├── __init__.py
-│   └── context.py                 # BrowserManager: Playwright + stealth, per-platform contexts, cookie persistence
-├── services/
-│   ├── __init__.py
-│   ├── cookie_manager.py          # Interactive login flow, LOGIN_URLS dict, cookie health check
-│   ├── dedup.py                   # Cross-platform duplicate marking via dedup_hash
-│   ├── exporter.py                # CSV per-run + cumulative Excel (openpyxl) with conditional formatting
-│   └── notifier.py                # SMTP email alerts for new jobs + session expiry warnings
-├── storage/
-│   ├── __init__.py
-│   └── db.py                      # SQLite: jobs table, runs table, dedup_hash index
-├── scheduler/
-│   ├── __init__.py
-│   └── runner.py                  # APScheduler: 9 AM + 4 PM IST cron, optional polling
-├── funding/
-│   ├── __init__.py
-│   ├── models.py                  # FundedCompany dataclass
-│   ├── scanner.py                 # Scrapes Inc42, YourStory, Entrackr, VCCircle + LinkedIn cross-reference
-│   └── exporter.py                # Funding-specific CSV + Excel export
-├── vc_portals/
-│   ├── __init__.py
-│   ├── registry.py                # 30 Indian VCs with metadata, 9 with known job portal URLs
-│   └── scraper.py                 # Scrapes VC job portals for PM roles
-├── mnc_careers/
-│   ├── __init__.py
-│   ├── registry.py                # 42 US MNCs with Delhi NCR offices + career page URLs
-│   └── scraper.py                 # Scrapes MNC career pages for PM roles
-├── outreach/
-│   ├── __init__.py
-│   ├── models.py                  # Pydantic models: Contact, OutreachEmail, CreditUsage
-│   ├── db.py                      # Separate SQLite DB (output/outreach.db): contacts, emails, credits tables
-│   ├── apollo_client.py           # Apollo.io API: People Search + People Enrich (2-step)
-│   ├── prospeo_client.py          # Prospeo API: email finder fallback when Apollo misses
-│   ├── enricher.py                # Job listings + funded companies -> Apollo Search -> Enrich -> verified emails
-│   ├── templates.py               # 3-step email sequence: intro, day 3 follow-up, day 7 final
-│   ├── reviewer.py                # Localhost HTTP server (port 8899) with approve/edit/skip/snooze UI
-│   ├── gmail_sender.py            # Gmail API OAuth2, 25/day rate limit, thread-aware follow-ups
-│   └── pipeline.py                # Orchestrates enrich -> template -> review -> send -> track
-├── services/
-│   ├── __init__.py
-│   ├── cookie_manager.py          # Interactive login flow, LOGIN_URLS dict, cookie health check
-│   ├── dedup.py                   # Cross-platform duplicate marking via dedup_hash
-│   ├── exporter.py                # CSV per-run + cumulative Excel (openpyxl) with conditional formatting
-│   ├── notifier.py                # SMTP email alerts for new jobs + session expiry warnings
-│   ├── scoring.py                 # Weighted heuristic scorer → relevance/salary/warmth/quality/semantic/priority scores + flags
-│   ├── semantic_scorer.py         # sentence-transformers semantic similarity scorer (all-MiniLM-L6-v2, lazy-loaded singleton)
-│   ├── company_intel.py           # Company profile cache (MNC registry + VC registry + scraped jobs)
-│   ├── connection_matcher.py      # LinkedIn CSV import + warmth scoring via company/alumni matching
-│   └── outreach_writer.py         # 4 deterministic outreach templates (recruiter/HM/funded/warm-intro)
-├── data/
-│   └── candidate_profile.json     # Candidate proof points, strengths, target comp — fill in before using outreach writer
-├── docs/                          # MANDATORY READING — see top of this file
-│   ├── known_edge_cases.md        # Data shapes / API quirks that broke naive code (18 entries, all with file+line refs)
-│   ├── guidelines_and_learnings.md  # Codified principles derived from real bugs (18 rules)
-│   └── protocol_to_identify_issues.md  # 7-phase audit protocol + common recipes
-├── output/                        # Runtime: jobs.db, outreach.db, CSV/Excel exports (gitignored)
-├── .env.example                   # Template for SMTP, Apollo, Gmail, schedule, logging config
-├── requirements.txt               # Python dependencies
-├── AGENTS.md                      # Agent instructions
-└── .gitignore                     # Excludes .venv, output/, cookies/, logs/, credentials/, .env
-```
+### Scraper Development Agent
+**When to use**: Adding or fixing a platform scraper.
 
-## Key Patterns
+**Key files to read first**:
+- `scrapers/base.py` — the abstract base class all scrapers extend
+- `scrapers/__init__.py` — the SCRAPER_REGISTRY (must register new scrapers here)
+- `models/job.py` — the Job Pydantic model (all scrapers must return `list[Job]`)
+- `config/search_params.py` — SearchParams dataclass with titles, location, experience, CTC
+- `services/cookie_manager.py` — LOGIN_URLS dict (add here if login-gated)
 
-- **`from __future__ import annotations`** is used in every file for Python 3.9 compatibility
-- **All scrapers** extend `BaseScraper` (scrapers/base.py) and implement `async def scrape() -> list[Job]`
-- **SCRAPER_REGISTRY** in `scrapers/__init__.py` maps platform names to scraper classes -- add new scrapers here
-- **Job model** (models/job.py) auto-computes `id` (SHA256 hash) and has a `dedup_hash` property for cross-platform matching
-- **Browser contexts** are per-platform with separate cookie jars via `BrowserManager.get_context(platform, cookies_dir)`
-- **Playwright stealth** uses `playwright_stealth.Stealth().apply_stealth(context)` (v2 API, NOT `stealth_async`)
-- **Async everywhere**: all scrapers, browser ops, and the main pipeline use asyncio
-- **Error isolation**: each scraper runs in its own try/except via `_safe_scrape()`, failures don't cascade
-- **Two SQLite databases**: `output/jobs.db` (jobs + runs + scoring tables) and `output/outreach.db` (contacts + emails + credits)
-- **Company slug normalisation**: `_company_slug()` in `services/scoring.py` strips punctuation and legal suffixes (pvt, ltd, technologies, etc.). All modules that look up `company_profiles` keys must use this same function — never compute slugs inline.
-- **Scoring is dict-based**: `score_job()` and `score_jobs()` operate on plain dicts (as returned by `JobDB`), not on `Job` model instances. Score fields are persisted via `db.update_job_scores()`.
-- **priority_bucket is the "scored" sentinel**: A job with `priority_bucket = ''` has never been scored. `get_jobs_for_scoring()` uses this condition — not `priority_score = 0`, which would incorrectly rescore legitimately poor-signal jobs.
-- **Semantic scorer is a lazy singleton**: `services/semantic_scorer.py` loads `all-MiniLM-L6-v2` (sentence-transformers) once on first call, guarded by `threading.Lock`. Returns 0 gracefully if the package is not installed — nothing in the pipeline breaks. The candidate embedding is built from `data/candidate_profile.json`.
-- **Six scoring dimensions**: `score_job()` returns `relevance_score`, `salary_likelihood_score`, `warmth_score`, `company_quality_score`, `semantic_score`, `priority_score`, `priority_bucket`, `score_reasons`, `priority_flags`. The `PRIORITY_WEIGHTS` in `config/scoring_rules.py` has five keys: `relevance` (0.35), `salary` (0.28), `warmth` (0.13), `company_quality` (0.09), `semantic` (0.15) — must sum to 1.0.
+**Patterns to follow**:
+- Extend `BaseScraper`, set `name` and `requires_login` class attributes
+- Use `self._get_page(url)` for Playwright navigation (adds stealth + delays)
+- Use `self._log` (structlog) for all logging
+- Use BeautifulSoup for HTML parsing, `await page.content()` to get HTML
+- For SPAs: `await page.wait_for_selector(...)` before parsing
+- For API-based scrapers (like RemoteOK): use `httpx.AsyncClient`, no Playwright needed
+- Always close pages after use: `await page.close()`
+- Handle errors per-card (try/except inside the loop), log and continue
+- Parse relative dates ("2 days ago") with a `_parse_relative_date()` helper
+- **Never hardcode search queries** — always use `self.search_params.title_keywords[0]` so the scraper respects SearchParams
+- **Guard `_get_page` failures**: wrap `page.goto()` in try/except and call `await page.close()` before re-raising, to prevent browser resource leaks
 
-## CLI Commands
+**Anti-scraping considerations**:
+- LinkedIn: guest mode, 3-7s delays, max 3 pages, check for `authwall` redirect
+- Glassdoor: best-effort only, check for `challenge`/`captcha` in HTML, return empty on block
+- General: random delays via `asyncio.sleep(random.uniform(2, 5))`
 
-```bash
-source .venv/bin/activate
+### Funding Scanner Agent
+**When to use**: Modifying or extending the funding news scraper.
 
-# Job scraping
-python main.py run                          # Scrape all 14 platforms
-python main.py run -p naukri -p linkedin    # Specific platforms only
-python main.py login instahyre             # Headed browser for manual login
-python main.py schedule                     # Start 9AM/4PM IST daemon
-python main.py export                       # Re-export DB to CSV/Excel
-python main.py status                       # Last run + cookie health
+**Key files**:
+- `funding/scanner.py` — FundingScanner class with per-source methods
+- `funding/models.py` — FundedCompany dataclass
+- `funding/exporter.py` — CSV + Excel export for funded companies
 
-# Supplementary sources
-python main.py funding                      # Scan funding news + LinkedIn check
-python main.py vc-jobs                      # Scrape VC portfolio job boards
-python main.py mnc-jobs                     # Scrape US MNC career pages
-python main.py run-all                      # Everything in sequence
+**Patterns**: Each source is a separate `_scan_*()` async method. All run concurrently via `asyncio.gather()`. Company extraction from headlines uses regex pattern matching. SERIES_KEYWORDS list must have "pre-seed"/"pre-series" before "seed" to avoid partial matches.
 
-# Decision engine (run after scraping)
-python main.py recommend                    # Score + rank jobs, print shortlist, export CSV
-python main.py recommend --top 50 --bucket high  # Filter options
-python main.py recommend --rescore          # Force rescore all jobs
-python main.py today                        # Daily action queue: apply / warm leads / follow-ups
-python main.py company-intel-refresh        # Rebuild company profile cache from local data
-python main.py connections-import linkedin.csv   # Import LinkedIn connections + warmth matching
-python main.py connections-import linkedin.csv --alumni "IIT Delhi" --alumni "BITS Pilani"
+### Registry/Data Agent
+**When to use**: Updating VC fund data, MNC lists, or job portal registries.
 
-# Application tracker
-python main.py shortlist --job-id JOBID     # Mark a job as shortlisted
-python main.py apply-status --job-id JOBID --status applied   # Update application stage
-python main.py pipeline-status              # Full pipeline summary
+**Key files**:
+- `vc_portals/registry.py` — 30 VCFund dataclass instances with portal URLs
+- `mnc_careers/registry.py` — 42 MNC dataclass instances with career page URLs
+- `services/cookie_manager.py` — LOGIN_URLS dict
 
-# Outreach
-python main.py draft-message --job-id JOBID --type recruiter          # Draft recruiter message
-python main.py draft-message --job-id JOBID --type hiring-manager     # Draft hiring-manager message
-python main.py draft-message --job-id JOBID --type funded-startup     # Draft for funded startups
-python main.py draft-message --job-id JOBID --type warm-intro --mutual "Alice Smith"
-python main.py draft-message --job-id JOBID --type recruiter --save   # Save to output/drafts/
+### Service Agent
+**When to use**: Modifying dedup logic, email notifications, export format, or scheduling.
 
-# Apollo/Gmail outreach pipeline
-python main.py outreach-enrich              # Apollo enrichment -> email drafts
-python main.py outreach-review              # Browser review page (localhost:8899)
-python main.py outreach-send                # Send approved emails via Gmail API
-python main.py outreach-status              # Pipeline stats + credit usage
-python main.py outreach-reply CONTACT_ID    # Mark reply, cancel follow-ups
+**Key files**:
+- `services/dedup.py` — Cross-platform dedup via `dedup_hash` (SHA256 of normalized company + title)
+- `services/notifier.py` — SMTP email with HTML table + CSV attachment (uses `html.escape()` for all user data)
+- `services/exporter.py` — CSV per-run + master Excel with conditional formatting
+- `scheduler/runner.py` — APScheduler with CronTrigger (9 AM, 4 PM IST)
 
-# Analytics
-python main.py analytics                    # Source quality + conversion stats
-```
+### Outreach Agent
+**When to use**: Modifying the outreach pipeline — contact enrichment, email templates, review UI, Gmail sending, or follow-up logic.
 
-## Outreach System
+**Key files to read first**:
+- `outreach/pipeline.py` — Main orchestration: enrich → template → review → send → track
+- `outreach/db.py` — Separate SQLite DB (`output/outreach.db`) with contacts, emails, credits tables
+- `outreach/models.py` — `OutreachContact` and `OutreachEmail` Pydantic models
+- `outreach/enricher.py` — Company → Apollo Search → Apollo Enrich → verified emails
 
-The `outreach/` module implements a 5-step automated outreach pipeline:
+**Apollo API (2-step process)**:
+1. **People Search** (`/api/v1/mixed_people/api_search`) — finds contacts at a company by title. Does NOT return emails.
+2. **People Enrichment** (`/api/v1/people/match`) — takes name + company, returns verified email. Requires `reveal_personal_emails: true`.
+- Auth: `x-api-key` header
+- Free tier: 10K credits/year (~833/month), 600 API calls/day
+- Rate limiting: `APOLLO_RATE_LIMIT_PER_MINUTE` in settings
 
-1. **Enrich** (`enricher.py`): Feeds from job listings + funded companies -> Apollo People Search (find contacts, no emails returned) -> Apollo People Enrich (get verified email) -> Prospeo fallback if Apollo misses
-2. **Template** (`templates.py`): 3-step email sequence with variable substitution -- intro, day 3 follow-up, day 7 final
-3. **Review** (`reviewer.py`): Localhost HTTP server on port 8899 with approve/edit/skip/snooze buttons
-4. **Send** (`gmail_sender.py`): Gmail API OAuth2, 25/day rate limit, thread-aware follow-ups
-5. **Track** (`db.py`): Separate SQLite DB with contacts, emails, and credit tracking tables
+**Prospeo fallback** (`outreach/prospeo_client.py`):
+- Endpoint: `POST https://api.prospeo.io/api/v1/enrich-person`
+- Auth: Bearer token
+- 75 free credits/month
+- Used only when Apollo returns no email for a contact
 
-Key rules:
-- **Two-step Apollo flow**: People Search returns contacts without emails; People Enrich is a separate call to get verified emails. This is intentional (Apollo charges differently for each).
-- **One-per-company rule**: Normalized company name dedup ensures only one contact per company enters the pipeline.
-- **Prospeo fallback**: When Apollo Enrich fails to find an email, `prospeo_client.py` is used as a secondary source.
-- **Gmail credentials**: OAuth2 via `credentials/gmail_credentials.json` from Google Cloud Console; token auto-refreshed at runtime.
+**Contact priority by company size**:
+- Startup (<100): Founder → Product Leader → Recruiter
+- Mid-size (100-500): Product Leader → Recruiter → Founder
+- Enterprise (500+): Recruiter → Product Leader
 
-## Development
+**One-per-company rule**: `company_has_outreach()` checks normalized company name. Skip if any contact exists in status other than "skipped".
 
-- **Python 3.9.6** (system), venv at `.venv/`
-- **Dependencies**: `pip install -r requirements.txt && playwright install chromium`
-- **Config**: copy `.env.example` to `.env` and fill in SMTP, Apollo, Gmail, and Prospeo credentials
-- **Storage**: SQLite at `output/jobs.db` and `output/outreach.db`, CSV/Excel exports in `output/`
-- **Cookies**: Playwright storage state in `cookies/{platform}.json`
-- **Logging**: structlog to console (configurable via LOG_LEVEL in .env)
+**Email templates** (`outreach/templates.py`):
+- 3-step sequence: intro (Day 1), follow-up (Day 3), final (Day 7)
+- Uses `string.Template` with `${}` variables
+- Key variables: `${first_name}`, `${company}`, `${job_title}`, `${funding_context}`, `${sender_name}`
+- `${funding_context}` is conditionally injected only for funded company sources
 
-## Adding a New Scraper
+**Review UI** (`outreach/reviewer.py`):
+- Localhost HTTP server on port 8899 (`REVIEW_PORT`)
+- HTML page with JS fetch() calls → POST /action endpoint
+- Actions: approve, edit (saves to DB then needs separate approve), skip, snooze
+- Handler class: `ReviewHandler` with class-level `db` and `html_content` attributes
 
-1. Create `scrapers/newplatform.py` extending `BaseScraper`
-2. Set `name = "newplatform"` and `requires_login = True/False`
-3. Implement `async def scrape(self) -> list[Job]`
-4. Register in `scrapers/__init__.py` SCRAPER_REGISTRY
-5. If login-gated, add login URL to `services/cookie_manager.py` LOGIN_URLS
+**Gmail sending** (`outreach/gmail_sender.py`):
+- Uses `google-api-python-client` with OAuth2
+- Credentials: `credentials/gmail_credentials.json` + `credentials/gmail_token.json`
+- Thread-aware: follow-ups include `threadId` from step 1's response
+- Daily limit enforced by `get_today_send_count()` in OutreachDB
 
-## Important Notes
+### Scoring / Decision Engine Agent
+**When to use**: Modifying scoring weights, adding new signals, changing bucket thresholds, or touching any of the P0–P2 services.
 
-- LinkedIn and Glassdoor have aggressive anti-scraping; expect partial results or failures
-- RemoteOK and WeWorkRemotely use API/RSS (no Playwright needed) -- fastest scrapers
-- Scraper selectors (CSS) will break when sites redesign -- check logs for `0 results` patterns
-- Never commit `.env`, `cookies/`, or `credentials/` (contains credentials and session tokens)
-- The `from __future__ import annotations` import is required everywhere for Python 3.9 compatibility
-- Playwright stealth is v2 API: `Stealth().apply_stealth(context)` -- do NOT use the old `stealth_async` function
-- Every scraper MUST use `self.search_params.title_keywords[0]` (not hardcoded strings) for its search query
-- `OUTREACH_EXPERIENCE_YEARS` is typed as `int` in Settings; `.env` value is coerced automatically by pydantic-settings
-- `_get_page()` in vc_portals and mnc_careers scrapers closes the page on `goto` failure -- follow this pattern in new scrapers too
-- `enrich_from_funding_data()` reads from `output/funded_companies_*.csv` (not jobs.db). Run `python main.py funding` first to produce that file.
-- Never access `db.conn` directly from outside `storage/db.py`. Add a method to `JobDB` instead.
-- `update_job_warmth_score()` in `JobDB` does NOT commit — caller must call `db.conn.commit()` after a batch to avoid N commits in a loop.
-- `data/candidate_profile.json` must be filled in before `draft-message` produces useful output.
-- **Dashboard design system** (`static/index.html`): all color tokens are defined once in CSS `:root` and mirrored in `const DS` at the top of the `<script>` block. Never add a raw hex value outside these two locations — hardcoded colors in component CSS/HTML/JS silently diverge from theme changes (this is what kept the sidebar dark after a full light-mode redesign). See `docs/guidelines_and_learnings.md` rule 18.
+**Key files to read first**:
+- `config/scoring_rules.py` — All heuristic constants (title weights, keyword lists, salary signals, bucket thresholds). Change weights here, not in scoring.py.
+- `services/scoring.py` — Core scorer. Reads rules from scoring_rules.py. `_company_slug()` is the canonical normalisation function — import it from here, never reimplement inline.
+- `services/company_intel.py` — Builds `company_profiles` table from MNC registry, VC registry, and scraped jobs. `enrich_from_funding_data()` reads from the latest `output/funded_companies_*.csv` — run `funding` command first.
+- `services/connection_matcher.py` — LinkedIn CSV import + warmth scoring. Writes to `network_contacts` and `job_connection_matches` tables.
+- `storage/db.py` — `get_jobs_for_scoring()`, `update_job_scores()`, `get_top_recommended_jobs()`, `get_job_by_id()`, `update_job_warmth_score()`.
+- `data/candidate_profile.json` — Candidate proof points used by outreach writer. User must fill this in.
+
+**Critical rules**:
+- `_company_slug()` from `services/scoring.py` is the single source of truth for company normalisation. Always import and use it — never compute slugs inline with regex. Inconsistency here causes company profile lookups to miss.
+- `priority_bucket = ''` is the "unscored" sentinel. `get_jobs_for_scoring()` checks this, NOT `priority_score = 0` (a legitimately poor job can score 0 and must not be rescored repeatedly).
+- `update_job_warmth_score()` does NOT commit. After a batch loop, call `db.conn.commit()` once at the end.
+- Scoring is done on plain dicts from `JobDB`, not on `Job` model instances. `Job.score_reasons` and `Job.priority_flags` are `list[str]` in the model but stored as JSON strings in the DB.
+
+**Score component summary**:
+- `relevance_score` (0-100): title match + keyword signals + location + recency + direct source
+- `salary_likelihood_score` (0-100): known high-paying company + MNC flag + funding series + seniority
+- `warmth_score` (0-100): 0 until connections imported; updated by `connection_matcher.py`
+- `company_quality_score` (0-100): MNC + funded + multiple PM roles + careers page present
+- `priority_score` = relevance×0.45 + salary×0.30 + warmth×0.15 + quality×0.10
+
+**Tables added to jobs.db**:
+- `company_profiles` — keyed by normalized_company slug
+- `applications` — application tracker (shortlist → applied → interviewing → offer)
+- `network_contacts` — imported from LinkedIn CSV
+- `job_connection_matches` — warmth match rows per job + contact
+
+### Audit & Debugging Agent
+**When to use**: User reports "something is wrong," "data looks off," or asks to audit a class of bugs.
+
+**Protocol**: Follow `docs/protocol_to_identify_issues.md` strictly — do NOT start editing files before completing Phase 0 (frame hypothesis), Phase 1 (parallel grep), and Phase 2 (verify sub-agent claims personally with the `Read` tool).
+
+**Key habits**:
+- **Always run Phase 3** (audit existing DB with the proposed filter) before touching production data. This is the step that catches unrelated bugs you weren't looking for.
+- **Never trust a sub-agent's "critical" findings without re-reading the line yourself.** Quote the exact code before proposing the fix.
+- **Fix the class, not the instance**: if one scraper has a page leak, grep all 14 for the same pattern.
+- **Three-layer verification** before declaring done: compile → behavioural smoke test → E2E runtime (server up + curl).
+- **Document the finding**: add to `docs/known_edge_cases.md`; promote to `docs/guidelines_and_learnings.md` on repeat occurrence.
+
+**Canonical examples in this repo**:
+- Location filter audit (April 2026): found 18 bugs across 16 files; `services/location_filter.py` is the single source of truth
+- Resource leak + API audit (April 2026): 20 bugs fixed across scrapers + API server + storage layer using the protocol above
+
+### Pipeline/CLI Agent
+**When to use**: Modifying the main orchestration logic or adding CLI commands.
+
+**Key files**:
+- `main.py` — Typer CLI with all commands, `_run_all()` orchestrates scrape → dedup → export → notify
+- `config/settings.py` — Pydantic-settings loading from .env
+
+**CLI command map (24 commands)**:
+- `run`, `schedule`, `login`, `export`, `status` — core job scraping
+- `funding`, `vc-jobs`, `mnc-jobs`, `run-all` — supplementary sources
+- `recommend`, `today`, `company-intel-refresh`, `connections-import` — decision engine
+- `shortlist`, `apply-status`, `pipeline-status` — application tracker
+- `draft-message` — outreach message generator
+- `analytics` — source quality + conversion stats
+- `outreach-enrich`, `outreach-review`, `outreach-send`, `outreach-status`, `outreach-reply` — Apollo/Gmail outreach pipeline
+
+## Common Pitfalls
+
+1. **playwright_stealth API**: v2 uses `Stealth().apply_stealth(context)`, NOT `stealth_async(context)`
+2. **Python 3.9 compatibility**: Use `from __future__ import annotations` in every file for `X | Y` type unions
+3. **Import paths**: Project uses absolute imports from project root (e.g., `from models.job import Job`). `sys.path.insert(0, project_root)` is set in main.py.
+4. **Cookie paths**: Use `Path("cookies")` relative path in scrapers — the BrowserManager resolves it relative to CWD
+5. **SQLite thread safety**: `JobDB` and `OutreachDB` each use a single connection; don't share across threads (asyncio is fine since it's single-threaded)
+6. **Selector fragility**: CSS selectors in scrapers WILL break when sites update. Use multiple fallback selectors with `or` chains: `soup.select("div.new-class") or soup.select("div.old-class")`
+7. **Two separate databases**: Jobs in `output/jobs.db` (via `storage/db.py`), outreach in `output/outreach.db` (via `outreach/db.py`). Don't mix them.
+8. **Apollo Search vs Enrich**: Search does NOT return emails. Always follow up with Enrich endpoint for each contact.
+9. **HTML escaping**: Use `html.escape()` for all user-supplied data in HTML output (reviewer, notifier).
+10. **Search query**: Each scraper must pass `self.search_params.title_keywords[0]` as the search term — never a hardcoded string. Hardcoding silently ignores user config.
+11. **Contact name extraction**: Use `.strip()` before `.split()[0]` when extracting first name from contact names — whitespace-only strings will cause IndexError otherwise.
+12. **Company slug consistency**: Always use `_company_slug()` from `services/scoring.py` when building or looking up keys in `company_profiles`. Inline regex that skips suffix-stripping will silently miss matches for "Meesho Technologies" → "meesho technologies" (inline) vs "meesho" (correct slug).
+13. **Unscored sentinel**: `priority_bucket = ''` means a job has never been scored. Do NOT check `priority_score = 0` as the "needs scoring" condition — a job with all-negative signals legitimately scores 0 and should not be rescored on every run.
+14. **Funding data flow**: The funding scanner writes to `output/funded_companies_*.csv`, NOT to jobs.db. `enrich_from_funding_data()` reads from that CSV. Always run `python main.py funding` before `company-intel-refresh` if you want funded company signals.
+15. **Direct db.conn access**: Never access `db.conn` from outside `storage/db.py`. If you need a new DB operation, add a method to `JobDB`. Exception: `connection_matcher.py` calls `db.conn.commit()` once after a batch of `update_job_warmth_score()` calls — this is intentional and documented.
+
+## Testing Approach
+
+- **Smoke test**: `python main.py run -p remoteok` (API-based, no browser needed, fastest feedback)
+- **Browser test**: `python main.py run -p naukri` (Playwright + HTML parsing)
+- **Login test**: `python main.py login instahyre` (headed browser, manual login)
+- **Full test**: `python main.py run-all` (all sources)
+- **Scoring test**: `python main.py recommend --rescore` (verify scoring engine end-to-end)
+- **Company intel test**: `python main.py company-intel-refresh` (verify MNC/VC registry loading)
+- **Outreach test**: `python main.py outreach-status` (verify DB + credit tracking)
+- **Import check**: `python -c "from scrapers import SCRAPER_REGISTRY; print(len(SCRAPER_REGISTRY))"`
+- **Outreach import check**: `python -c "from outreach.pipeline import run_enrich, run_send"`
+- **Scoring import check**: `python -c "from services.scoring import score_job, _company_slug; print(score_job({'title':'Senior Product Manager','company':'Google','location':'Gurugram','platform':'naukri'}))"`
+
+## File Organization Rules
+
+- One scraper per file in `scrapers/`
+- All scrapers registered in `scrapers/__init__.py` SCRAPER_REGISTRY
+- Data registries (VCs, MNCs) are separate from their scrapers
+- Services are stateless functions/classes (except JobDB/OutreachDB which hold connections)
+- Outreach has its own DB, models, and pipeline — separate from the scraping pipeline
+- Credentials go in `credentials/` (gitignored), API keys go in `.env` (gitignored)
+- No test files yet — add to `tests/` directory when needed

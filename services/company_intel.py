@@ -105,7 +105,27 @@ def build_company_profiles(db: "JobDB") -> int:
         pass
 
     # ----------------------------------------------------------------
-    # 3. Scraped jobs — aggregate PM role counts and seen platforms
+    # 3. YC registry — mark portfolio companies as YC-backed
+    # ----------------------------------------------------------------
+    try:
+        yc_companies = db.get_yc_companies()
+        for yc in yc_companies:
+            slug = _company_slug(yc.get("company_name", ""))
+            if not slug:
+                continue
+            p = _get_or_create(slug, yc["company_name"])
+            p["is_funded"] = 1
+            p["is_yc_backed"] = 1
+            p["yc_batch"] = yc.get("batch", "")
+            if yc.get("website"):
+                p["company_domain"] = p.get("company_domain") or _extract_domain(yc["website"])
+            if yc.get("hq_location"):
+                p["hq_location"] = p.get("hq_location") or yc["hq_location"]
+    except Exception:
+        pass  # Table may not exist on older DBs
+
+    # ----------------------------------------------------------------
+    # 4. Scraped jobs — aggregate PM role counts and seen platforms
     # ----------------------------------------------------------------
     all_jobs = db.get_all_jobs()
     company_jobs: dict[str, list[dict]] = {}
@@ -136,7 +156,7 @@ def build_company_profiles(db: "JobDB") -> int:
                 p["careers_page"] = link
 
     # ----------------------------------------------------------------
-    # 4. Persist
+    # 5. Persist
     # ----------------------------------------------------------------
     for profile in profiles.values():
         # Ensure seen_platforms is serialisable
