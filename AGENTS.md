@@ -14,7 +14,7 @@
 
 ## Project Context
 
-This is a Python async CLI tool for aggregating PM job listings across 14 platforms, VC portals, MNC career pages, funding trackers, and automated email outreach. The user is a Senior PM candidate targeting Delhi NCR, 5-7 yrs exp, 40+ LPA, Tech/SaaS/B2B.
+This is a Python async CLI tool for aggregating PM job listings across 14 platforms, VC portals, MNC career pages, funding trackers, and automated email outreach. The user is a Senior PM candidate targeting Delhi NCR, 5-7 yrs exp, 50+ LPA, Tech/SaaS/B2B.
 
 ## Agent Roles
 
