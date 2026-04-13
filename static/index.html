@@ -598,6 +598,18 @@ body::after {
 
 @keyframes fadeIn{from{opacity:0;transform:translateY(5px)}to{opacity:1;transform:none}}
 .fade-in{animation:fadeIn .2s ease}
+
+/* ── YC MULTI-SELECT DROPDOWNS ──────────────── */
+.yc-ms-wrap{position:relative;display:inline-block}
+.yc-ms-trigger{font-size:12px;padding:5px 10px;border:1px solid var(--br);border-radius:6px;background:var(--card);color:var(--t2);cursor:pointer;user-select:none;display:flex;align-items:center;gap:6px;white-space:nowrap;font-family:'DM Sans',sans-serif}
+.yc-ms-trigger:hover{border-color:var(--brh);color:var(--t1)}
+.yc-ms-trigger.active{border-color:var(--acc);color:var(--acc)}
+.yc-ms-panel{position:absolute;top:calc(100% + 4px);left:0;z-index:60;background:var(--card);border:1px solid var(--br);border-radius:8px;padding:6px 0;min-width:220px;max-height:260px;overflow-y:auto;box-shadow:0 6px 20px rgba(0,0,0,0.12)}
+.yc-ms-panel label{display:flex;align-items:center;gap:8px;font-size:11px;color:var(--t2);padding:5px 12px;cursor:pointer;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.yc-ms-panel label:hover{background:var(--neug);color:var(--t1)}
+.yc-ms-panel input[type=checkbox]{accent-color:var(--acc);flex-shrink:0}
+.yc-ms-panel .ms-clear{font-size:10px;color:var(--t3);padding:5px 12px;border-top:1px solid var(--br);cursor:pointer;text-align:center;display:block}
+.yc-ms-panel .ms-clear:hover{color:var(--t1)}
 </style>
 </head>
 <body>
@@ -890,6 +902,46 @@ body::after {
       </button>
     </div>
   </div>
+  <!-- Advanced filter strip -->
+  <div id="yc-filter-row" style="padding:8px 24px;background:var(--card2);border-bottom:1px solid var(--br);display:flex;gap:10px;align-items:center;flex-wrap:wrap;flex-shrink:0">
+    <!-- Indian Founders toggle -->
+    <label style="display:flex;align-items:center;gap:6px;font-size:11px;color:var(--t2);cursor:pointer;padding:5px 10px;border:1px solid var(--br);border-radius:6px;background:var(--card);white-space:nowrap;font-family:'DM Sans',sans-serif" title="Companies with probable Indian-origin founders (run yc-classify-founders first)">
+      <input type="checkbox" id="yc-indian-founders" onchange="_ycPage=1;loadYC()" style="accent-color:var(--acc)"/>
+      Indian Founders
+    </label>
+
+    <!-- Location multi-select -->
+    <div class="yc-ms-wrap" id="yc-loc-wrap">
+      <div class="yc-ms-trigger" id="yc-loc-trigger" onclick="toggleYCMS('yc-loc-wrap','yc-loc-trigger',event)">
+        <span id="yc-loc-label">All Locations</span><span style="font-size:9px;opacity:.6">▾</span>
+      </div>
+      <div class="yc-ms-panel" id="yc-loc-panel" style="display:none">
+        <div id="yc-loc-options"></div>
+        <span class="ms-clear" onclick="clearYCMS('yc-loc-options','yc-loc-label','All Locations')">Clear selection</span>
+      </div>
+    </div>
+
+    <!-- Industry multi-select -->
+    <div class="yc-ms-wrap" id="yc-ind-wrap">
+      <div class="yc-ms-trigger" id="yc-ind-trigger" onclick="toggleYCMS('yc-ind-wrap','yc-ind-trigger',event)">
+        <span id="yc-ind-label">All Industries</span><span style="font-size:9px;opacity:.6">▾</span>
+      </div>
+      <div class="yc-ms-panel" id="yc-ind-panel" style="display:none">
+        <div id="yc-ind-options"></div>
+        <span class="ms-clear" onclick="clearYCMS('yc-ind-options','yc-ind-label','All Industries')">Clear selection</span>
+      </div>
+    </div>
+
+    <!-- Team size slider (min employees) -->
+    <div style="display:flex;align-items:center;gap:8px;font-size:11px;color:var(--t2);white-space:nowrap">
+      <span>Min Team:</span>
+      <input type="range" id="yc-team-slider" min="0" max="500" step="10" value="0"
+             style="width:90px;accent-color:var(--acc)"
+             oninput="document.getElementById('yc-team-val').textContent=+this.value>0?this.value+'+':'Any';clearTimeout(window._ycTS);window._ycTS=setTimeout(()=>{_ycPage=1;loadYC()},400)"/>
+      <span id="yc-team-val" style="font-family:'JetBrains Mono',monospace;font-size:10px;min-width:28px">Any</span>
+    </div>
+  </div>
+
   <div style="flex:1;overflow-y:auto;padding:20px 24px">
     <!-- KPI row -->
     <div id="yc-stats-row" style="display:grid;grid-template-columns:repeat(6,1fr);gap:12px;margin-bottom:20px">
@@ -1746,6 +1798,71 @@ async function loadFunding() {
 
 let _ycPage = 1;
 let _ycBatchesLoaded = false;
+let _ycLocationsLoaded = false;
+let _ycIndustriesLoaded = false;
+
+// ── Multi-select helpers ───────────────────────────
+
+function toggleYCMS(wrapId, triggerId, evt) {
+  if (evt) evt.stopPropagation();
+  const panel = document.getElementById(wrapId).querySelector('.yc-ms-panel');
+  const isOpen = panel.style.display !== 'none';
+  // Close all panels first
+  document.querySelectorAll('.yc-ms-panel').forEach(p => p.style.display = 'none');
+  document.querySelectorAll('.yc-ms-trigger').forEach(t => t.classList.remove('active'));
+  if (!isOpen) {
+    panel.style.display = 'block';
+    document.getElementById(triggerId).classList.add('active');
+  }
+}
+
+function clearYCMS(optionsDivId, labelId, noneText) {
+  document.getElementById(optionsDivId)
+    .querySelectorAll('input[type=checkbox]')
+    .forEach(cb => { cb.checked = false; });
+  document.getElementById(labelId).textContent = noneText;
+  _ycPage = 1;
+  loadYC();
+}
+
+function getYCMSValues(optionsDivId) {
+  return Array.from(
+    document.getElementById(optionsDivId).querySelectorAll('input[type=checkbox]:checked')
+  ).map(cb => cb.value);
+}
+
+function updateYCMSLabel(optionsDivId, labelId, noneText) {
+  const checked = Array.from(
+    document.getElementById(optionsDivId).querySelectorAll('input[type=checkbox]:checked')
+  );
+  const el = document.getElementById(labelId);
+  if (!checked.length) { el.textContent = noneText; return; }
+  el.textContent = checked.length === 1 ? checked[0].value.split(',')[0].trim() : `${checked.length} selected`;
+}
+
+function populateYCMS(optionsDivId, labelId, noneText, values) {
+  const div = document.getElementById(optionsDivId);
+  if (!div || div.children.length > 0) return; // already populated
+  values.forEach(v => {
+    const lbl = document.createElement('label');
+    const cb = document.createElement('input');
+    cb.type = 'checkbox'; cb.value = v;
+    cb.onchange = () => { updateYCMSLabel(optionsDivId, labelId, noneText); _ycPage=1; loadYC(); };
+    lbl.appendChild(cb);
+    lbl.appendChild(document.createTextNode(' ' + v));
+    div.appendChild(lbl);
+  });
+}
+
+// Close all panels on outside click
+document.addEventListener('click', (e) => {
+  if (!e.target.closest('.yc-ms-wrap')) {
+    document.querySelectorAll('.yc-ms-panel').forEach(p => p.style.display = 'none');
+    document.querySelectorAll('.yc-ms-trigger').forEach(t => t.classList.remove('active'));
+  }
+});
+
+// ── Main load function ─────────────────────────────
 
 async function loadYC(page) {
   if (page) _ycPage = page;
@@ -1753,6 +1870,10 @@ async function loadYC(page) {
   const batch = document.getElementById('yc-batch-filter').value;
   const hiringFilter = document.getElementById('yc-hiring-filter').value;
   const search = (document.getElementById('yc-search').value||'').trim();
+  const indianOnly = document.getElementById('yc-indian-founders').checked;
+  const teamMin = parseInt(document.getElementById('yc-team-slider').value, 10) || 0;
+  const selLocs = getYCMSValues('yc-loc-options');
+  const selInds = getYCMSValues('yc-ind-options');
 
   try {
     // Load batches dropdown once
@@ -1765,11 +1886,33 @@ async function loadYC(page) {
       } catch(e) { /* batches optional */ }
     }
 
+    // Load location options once
+    if (!_ycLocationsLoaded) {
+      try {
+        const locs = await GET('/api/yc/locations');
+        populateYCMS('yc-loc-options', 'yc-loc-label', 'All Locations', locs);
+        _ycLocationsLoaded = true;
+      } catch(e) { /* optional */ }
+    }
+
+    // Load industry options once
+    if (!_ycIndustriesLoaded) {
+      try {
+        const inds = await GET('/api/yc/industries');
+        populateYCMS('yc-ind-options', 'yc-ind-label', 'All Industries', inds);
+        _ycIndustriesLoaded = true;
+      } catch(e) { /* optional */ }
+    }
+
     // Build query
     let q = `/api/yc/companies?page=${_ycPage}&limit=50`;
     if (batch) q += `&batch=${encodeURIComponent(batch)}`;
     if (hiringFilter === 'hiring') q += '&hiring_only=true';
     if (hiringFilter === 'hiring_pm') q += '&hiring_pm_only=true';
+    if (indianOnly) q += '&indian_founders_only=true';
+    if (teamMin > 0) q += `&team_size_min=${teamMin}`;
+    if (selLocs.length) q += `&locations=${encodeURIComponent(selLocs.join(','))}`;
+    if (selInds.length) q += `&industries=${encodeURIComponent(selInds.join(','))}`;
     if (search) q += `&search=${encodeURIComponent(search)}`;
 
     const [data, stats] = await Promise.all([GET(q), GET('/api/yc/stats')]);
@@ -1801,12 +1944,16 @@ async function loadYC(page) {
       const founderNames = (c.founders||[]).slice(0,2).map(f=>f.name||f).join(', ') || '—';
       const founderCount = (c.founders||[]).length;
 
-      return `<tr class="row-hover">
+      const indianBadge = c.has_indian_origin_founder
+        ? `<span title="Probable Indian-origin founder" style="font-size:9px;color:var(--t3)">🇮🇳</span>`
+        : '';
+
+      return `<tr class="row-hover" onclick="showYCDetail('${c.id}')" style="cursor:pointer">
         <td>
           <div style="display:flex;align-items:center;gap:8px">
             ${c.logo_url ? `<img src="${c.logo_url}" style="width:20px;height:20px;border-radius:4px;object-fit:contain" onerror="this.style.display='none'"/>` : ''}
             <div>
-              <div style="font-size:12px;font-weight:500;color:var(--t1)">${c.company_name}</div>
+              <div style="font-size:12px;font-weight:500;color:var(--t1)">${c.company_name} ${indianBadge}</div>
               <div style="font-size:10px;color:var(--t3);max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${c.description||''}</div>
             </div>
           </div>
@@ -1818,10 +1965,9 @@ async function loadYC(page) {
         <td><span style="font-size:10px;color:${statusColor};font-weight:600">${c.status||'—'}</span></td>
         <td>${hiringBadge}</td>
         <td style="font-size:11px;color:var(--t2)">${founderNames}${founderCount>2?` +${founderCount-2}`:''}</td>
-        <td style="white-space:nowrap">
-          <button class="btn-ghost btn-sm" onclick="showYCDetail('${c.id}')" style="font-size:10px">Detail</button>
-          ${c.website?`<a href="${c.website}" target="_blank" class="btn-ghost btn-sm" style="font-size:10px;text-decoration:none">Site ↗</a>`:''}
-          <a href="https://www.ycombinator.com/companies/${c.company_slug}" target="_blank" class="btn-ghost btn-sm" style="font-size:10px;text-decoration:none;color:${DS.org}">YC ↗</a>
+        <td style="white-space:nowrap" onclick="event.stopPropagation()">
+          ${c.website?`<a href="${c.website}" target="_blank" class="btn-ghost btn-sm" style="font-size:10px;text-decoration:none" onclick="event.stopPropagation()">Site ↗</a>`:''}
+          <a href="https://www.ycombinator.com/companies/${c.company_slug}" target="_blank" class="btn-ghost btn-sm" style="font-size:10px;text-decoration:none;color:${DS.org}" onclick="event.stopPropagation()">YC ↗</a>
         </td>
       </tr>`;
     }).join('');

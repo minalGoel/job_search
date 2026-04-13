@@ -1310,6 +1310,71 @@ async def _run_yc_scrape_founders(
         db.close()
 
 
+@app.command(name="yc-classify-founders")
+def yc_classify_founders(
+    batch: Optional[str] = typer.Option(None, "--batch", "-b", help="Limit to a YC batch (e.g. S24,W24)"),
+    hiring_only: bool = typer.Option(False, "--hiring-only", help="Only classify companies currently hiring"),
+    limit: int = typer.Option(0, "--limit", help="Max companies to process. 0 = all with founder data"),
+) -> None:
+    """Classify YC founders as probable Indian-origin using the nationalize.io API.
+
+    Requires yc-scrape-founders to have been run first so founder names exist.
+    Uses 1 API call per unique first name (free tier: 1 000 req/day).
+    Results stored in yc_companies.has_indian_origin_founder and .indian_origin_confidence.
+    """
+    _configure_logging()
+    asyncio.run(_run_yc_classify(batch, hiring_only, limit))
+
+
+async def _run_yc_classify(batch: Optional[str], hiring_only: bool, limit: int) -> None:
+    from storage.db import JobDB
+    from yc_startups.name_origin import classify_founders_batch
+
+    db = JobDB()
+    try:
+        companies = db.get_yc_companies(
+            batch=batch or "",
+            hiring_only=hiring_only,
+            limit=limit,
+        )
+
+        # Only classify companies that have scraped founder data
+        with_founders = [c for c in companies if c.get("founders")]
+        if not with_founders:
+            typer.echo(
+                "No companies with founder data found.\n"
+                "Run 'yc-scrape-founders' first to populate founder names."
+            )
+            return
+
+        typer.echo(
+            f"Classifying {len(with_founders)} companies with founder data "
+            f"(of {len(companies)} total)...\n"
+        )
+
+        results = await classify_founders_batch(with_founders)
+
+        indian_count = 0
+        for r in results:
+            db.update_yc_indian_origin(
+                r["company_id"], r["has_indian_origin_founder"], r["indian_origin_confidence"]
+            )
+            if r["has_indian_origin_founder"]:
+                indian_count += 1
+        db.conn.commit()
+
+        typer.echo(
+            f"Done: {indian_count} / {len(with_founders)} companies flagged with "
+            f"probable Indian-origin founders."
+        )
+        typer.echo(
+            "Run 'yc-hiring-check --indian-founders' or view in the dashboard "
+            "YC Startups screen with the Indian Founders filter."
+        )
+    finally:
+        db.close()
+
+
 @app.command(name="yc-enrich-founders")
 def yc_enrich_founders(
     batch: Optional[str] = typer.Option(None, "--batch", "-b", help="Filter by batch"),

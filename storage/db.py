@@ -260,6 +260,21 @@ class JobDB:
                 self.conn.execute(
                     f"ALTER TABLE company_profiles ADD COLUMN {col_name} {col_ddl}"
                 )
+
+        # Migrate yc_companies for Indian-origin founder classification columns
+        yc_new_cols = [
+            ("has_indian_origin_founder", "INTEGER DEFAULT 0"),
+            ("indian_origin_confidence", "REAL DEFAULT 0.0"),
+        ]
+        yc_existing = {
+            row[1]
+            for row in self.conn.execute("PRAGMA table_info(yc_companies)").fetchall()
+        }
+        for col_name, col_ddl in yc_new_cols:
+            if col_name not in yc_existing:
+                self.conn.execute(
+                    f"ALTER TABLE yc_companies ADD COLUMN {col_name} {col_ddl}"
+                )
         self.conn.commit()
 
     def _ensure_indexes(self) -> None:
@@ -822,17 +837,19 @@ class JobDB:
         self.conn.commit()
         return len(companies)
 
-    def get_yc_companies(
+    def _build_yc_conditions(
         self,
         batch: Optional[str] = None,
         hiring_only: bool = False,
         hiring_pm_only: bool = False,
+        indian_founders_only: bool = False,
+        locations: Optional[list[str]] = None,
+        industries: Optional[list[str]] = None,
+        team_size_min: int = 0,
         search: str = "",
-        limit: int = 0,
-        offset: int = 0,
-    ) -> list[dict]:
-        """Query YC companies with filters."""
-        conditions = []
+    ) -> tuple[list[str], list]:
+        """Build WHERE conditions for YC company queries (shared by get/count)."""
+        conditions: list[str] = []
         params: list = []
 
         if batch:
@@ -842,11 +859,47 @@ class JobDB:
             conditions.append("is_hiring = 1")
         if hiring_pm_only:
             conditions.append("is_hiring_pm = 1")
+        if indian_founders_only:
+            conditions.append("has_indian_origin_founder = 1")
+        if locations:
+            placeholders = ", ".join("?" * len(locations))
+            conditions.append(f"hq_location IN ({placeholders})")
+            params.extend(locations)
+        if industries:
+            placeholders = ", ".join("?" * len(industries))
+            conditions.append(f"industry IN ({placeholders})")
+            params.extend(industries)
+        if team_size_min > 0:
+            conditions.append("team_size != '' AND CAST(team_size AS INTEGER) >= ?")
+            params.append(team_size_min)
         if search:
-            conditions.append("(company_name LIKE ? OR description LIKE ? OR industry LIKE ?)")
+            conditions.append(
+                "(company_name LIKE ? OR description LIKE ? OR industry LIKE ? OR hq_location LIKE ?)"
+            )
             term = f"%{search}%"
-            params.extend([term, term, term])
+            params.extend([term, term, term, term])
 
+        return conditions, params
+
+    def get_yc_companies(
+        self,
+        batch: Optional[str] = None,
+        hiring_only: bool = False,
+        hiring_pm_only: bool = False,
+        indian_founders_only: bool = False,
+        locations: Optional[list[str]] = None,
+        industries: Optional[list[str]] = None,
+        team_size_min: int = 0,
+        search: str = "",
+        limit: int = 0,
+        offset: int = 0,
+    ) -> list[dict]:
+        """Query YC companies with filters."""
+        conditions, params = self._build_yc_conditions(
+            batch=batch, hiring_only=hiring_only, hiring_pm_only=hiring_pm_only,
+            indian_founders_only=indian_founders_only, locations=locations,
+            industries=industries, team_size_min=team_size_min, search=search,
+        )
         where = f"WHERE {' AND '.join(conditions)}" if conditions else ""
         sql = f"SELECT * FROM yc_companies {where} ORDER BY batch DESC, company_name ASC"
         if limit > 0:
@@ -998,32 +1051,64 @@ class JobDB:
         return batches
 
     def count_yc_companies(
-        self, batch: Optional[str] = None, hiring_only: bool = False,
-        hiring_pm_only: bool = False, search: str = "",
+        self,
+        batch: Optional[str] = None,
+        hiring_only: bool = False,
+        hiring_pm_only: bool = False,
+        indian_founders_only: bool = False,
+        locations: Optional[list[str]] = None,
+        industries: Optional[list[str]] = None,
+        team_size_min: int = 0,
+        search: str = "",
     ) -> int:
-        conditions = []
-        params: list = []
-        if batch:
-            conditions.append("batch = ?")
-            params.append(batch)
-        if hiring_only:
-            conditions.append("is_hiring = 1")
-        if hiring_pm_only:
-            conditions.append("is_hiring_pm = 1")
-        if search:
-            conditions.append("(company_name LIKE ? OR description LIKE ? OR industry LIKE ?)")
-            term = f"%{search}%"
-            params.extend([term, term, term])
+        conditions, params = self._build_yc_conditions(
+            batch=batch, hiring_only=hiring_only, hiring_pm_only=hiring_pm_only,
+            indian_founders_only=indian_founders_only, locations=locations,
+            industries=industries, team_size_min=team_size_min, search=search,
+        )
         where = f"WHERE {' AND '.join(conditions)}" if conditions else ""
         return self.conn.execute(
             f"SELECT COUNT(*) FROM yc_companies {where}", params
         ).fetchone()[0]
+
+    def update_yc_indian_origin(
+        self, company_id: str, has_indian: bool, confidence: float,
+    ) -> None:
+        """Update the Indian-origin founder classification for a company."""
+        self.conn.execute(
+            """UPDATE yc_companies
+               SET has_indian_origin_founder = ?, indian_origin_confidence = ?
+               WHERE id = ?""",
+            (int(has_indian), confidence, company_id),
+        )
+        # Caller commits after batch
+
+    def get_yc_locations(self, limit: int = 100) -> list[str]:
+        """Return distinct non-empty hq_location values, most common first."""
+        rows = self.conn.execute(
+            """SELECT hq_location, COUNT(*) as cnt FROM yc_companies
+               WHERE hq_location != ''
+               GROUP BY hq_location ORDER BY cnt DESC LIMIT ?""",
+            (limit,),
+        ).fetchall()
+        return [r[0] for r in rows]
+
+    def get_yc_industries(self) -> list[str]:
+        """Return distinct non-empty industry values, most common first."""
+        rows = self.conn.execute(
+            """SELECT industry, COUNT(*) as cnt FROM yc_companies
+               WHERE industry != ''
+               GROUP BY industry ORDER BY cnt DESC""",
+        ).fetchall()
+        return [r[0] for r in rows]
 
     def _yc_row_to_dict(self, row: sqlite3.Row) -> dict:
         d = dict(row)
         d["founders"] = json.loads(d.get("founders") or "[]")
         d["is_hiring"] = bool(d.get("is_hiring"))
         d["is_hiring_pm"] = bool(d.get("is_hiring_pm"))
+        d["has_indian_origin_founder"] = bool(d.get("has_indian_origin_founder", False))
+        d.setdefault("indian_origin_confidence", 0.0)
         return d
 
     # ------------------------------------------------------------------

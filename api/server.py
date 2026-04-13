@@ -861,18 +861,26 @@ def list_yc_companies(
     batch: str = Query(""),
     hiring_only: bool = Query(False),
     hiring_pm_only: bool = Query(False),
+    indian_founders_only: bool = Query(False),
+    locations: str = Query(""),   # comma-separated exact hq_location values
+    industries: str = Query(""),  # comma-separated exact industry values
+    team_size_min: int = Query(0, ge=0),
     search: str = Query(""),
 ) -> dict:
     db = _jobs_db()
     try:
+        loc_list = [v.strip() for v in locations.split(",") if v.strip()] if locations else None
+        ind_list = [v.strip() for v in industries.split(",") if v.strip()] if industries else None
         total = db.count_yc_companies(
-            batch=batch, hiring_only=hiring_only,
-            hiring_pm_only=hiring_pm_only, search=search,
+            batch=batch, hiring_only=hiring_only, hiring_pm_only=hiring_pm_only,
+            indian_founders_only=indian_founders_only, locations=loc_list,
+            industries=ind_list, team_size_min=team_size_min, search=search,
         )
         offset = (page - 1) * limit
         companies = db.get_yc_companies(
-            batch=batch, hiring_only=hiring_only,
-            hiring_pm_only=hiring_pm_only, search=search,
+            batch=batch, hiring_only=hiring_only, hiring_pm_only=hiring_pm_only,
+            indian_founders_only=indian_founders_only, locations=loc_list,
+            industries=ind_list, team_size_min=team_size_min, search=search,
             limit=limit, offset=offset,
         )
         return {
@@ -881,6 +889,26 @@ def list_yc_companies(
             "page": page,
             "pages": max(1, (total + limit - 1) // limit),
         }
+    finally:
+        db.close()
+
+
+@app.get("/api/yc/locations")
+def get_yc_locations() -> list[str]:
+    """Distinct hq_location values for the location multi-select filter."""
+    db = _jobs_db()
+    try:
+        return db.get_yc_locations()
+    finally:
+        db.close()
+
+
+@app.get("/api/yc/industries")
+def get_yc_industries() -> list[str]:
+    """Distinct industry values for the industry multi-select filter."""
+    db = _jobs_db()
+    try:
+        return db.get_yc_industries()
     finally:
         db.close()
 
