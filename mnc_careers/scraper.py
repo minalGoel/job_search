@@ -117,20 +117,20 @@ class MNCCareerScraper:
                     if href and not href.startswith("http"):
                         href = urljoin(mnc.pm_search_url, href)
 
-                    # Extract location — expanded selector set + fallback to registry value.
+                    # Extract location — ordered from most-specific to least-specific.
+                    # h2/h3/h4[class*='location'] covers Expedia (Results__list__location h5).
+                    # Never fall back to mnc.delhi_ncr_office: MNC search URLs may return
+                    # global results, so an unresolvable location must be rejected, not assumed NCR.
                     loc_el = (
-                        el.select_one("span[class*='location'], div[class*='location'], span[class*='loc']")
+                        el.select_one("h2[class*='location'], h3[class*='location'], h4[class*='location']")
+                        or el.select_one("span[class*='location'], div[class*='location'], span[class*='loc']")
                         or el.select_one("li[class*='location'], p[class*='location']")
                         or el.select_one("[data-testid*='location'], [data-automation*='location']")
-                        or el.select_one("[class*='city'], [class*='region'], [class*='country']")
                         or el.select_one("[class*='job-location'], [class*='jobLocation']")
+                        or el.select_one("[class*='city'], [class*='region'], [class*='country']")
                         or el.select_one("span[class*='meta'], div[class*='meta']")
                     )
                     location = loc_el.get_text(strip=True) if loc_el else ""
-                    # Fallback: pm_search_url already filters for India, so trust the registry
-                    if not location and mnc.delhi_ncr_office:
-                        location = mnc.delhi_ncr_office
-                        self._log.debug("mnc.location_fallback", company=mnc.name, fallback=location)
 
                     if not (title and href):
                         continue

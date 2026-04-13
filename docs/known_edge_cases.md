@@ -38,6 +38,8 @@ Job portals accept `?location=`, `?country=`, `?region=` parameters but frequent
 
 **Rule:** Never trust a portal's URL-level filter. Extract `location` from **each individual result** and run it through `is_acceptable_location()` before appending to the jobs list. The pipeline-level gate in `main.py _run_all()` is a safety net, not the first line of defence.
 
+**Corollary — MNC location fallback:** `_scrape_mnc()` previously fell back to `mnc.delhi_ncr_office` (e.g. "Gurugram") when no location element was found in the HTML. This compounded the URL-filter problem: Expedia's `?location=India` returned global results, the CSS selectors found no location tag, and the fallback branded every job as "Gurugram". 21 US/Europe roles entered the DB as Delhi NCR jobs. **Fix (April 2026):** the fallback was removed; an empty location stays empty and is rejected by `is_acceptable_location("")`. See `mnc_careers/scraper.py:130`.
+
 ---
 
 ## 3. Naukri's `placeholders` array is type-indexed, not positional

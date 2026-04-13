@@ -1,63 +1,47 @@
 {
-  "_comment": "Fill in your details. Used by outreach_writer.py for personalised message generation.",
-  "headline": "Senior Product Manager | B2B SaaS & Platform Products | Delhi NCR",
+  "_comment": "Generated from resume; phone and email removed.",
+  "headline": "Senior Product Manager | AI-native SaaS & Platform Products | Delhi NCR",
   "years_experience": 6,
   "current_title": "Senior Product Manager",
-  "current_company": "",
+  "current_company": "District by Zomato / Prismforce",
   "location": "Delhi NCR",
   "target_comp_lpa": 40,
   "education": {
-    "degree": "B.Tech / MBA",
-    "institution": "",
-    "year": ""
+    "degree": "B.Tech, Electrical Engineering",
+    "institution": "Indian Institute of Technology Kanpur",
+    "year": "2019"
   },
   "domain_strengths": [
     "B2B SaaS",
-    "Platform & API Products",
-    "Growth & Monetisation",
-    "0-to-1 Product Development",
-    "Data-driven Roadmapping"
+    "Product Strategy & Roadmap",
+    "LLM evaluation & AI agents",
+    "Platform adoption & performance optimization",
+    "Data-driven decision making",
+    "Cross-functional collaboration"
+  ],
+  "industries_preferred": [
+    "SaaS",
+    "AI/ML",
+    "Edtech",
+    "Fintech",
+    "Developer Tools",
+    "Marketplace"
+  ],
+  "linkedin_url": "https://linkedin.com/in/minalgoel",
+  "portfolio_url": "",
+  "alumni_institutions": [
+    "Indian Institute of Technology Kanpur"
   ],
   "proof_points": [
-    {
-      "tag": "growth",
-      "text": "Grew DAU by 40% in 6 months through data-driven feature prioritisation and A/B testing."
-    },
-    {
-      "tag": "monetisation",
-      "text": "Launched tiered pricing model that increased ARR by 25% without impacting retention."
-    },
-    {
-      "tag": "0to1",
-      "text": "Built and shipped a self-serve onboarding flow from scratch, reducing time-to-value from 14 days to 3."
-    },
-    {
-      "tag": "platform",
-      "text": "Led platform API redesign adopted by 30+ enterprise customers, improving integration NPS by 18 points."
-    },
-    {
-      "tag": "b2b",
-      "text": "Managed a B2B product serving 200+ enterprise accounts, driving 90% renewal rate."
-    },
-    {
-      "tag": "data",
-      "text": "Established product analytics stack and OKR cadence across 3 squads."
-    },
-    {
-      "tag": "cross_functional",
-      "text": "Partnered with Sales, Engineering, and Design across 4 geographies to ship 2 major product lines."
-    },
-    {
-      "tag": "user_research",
-      "text": "Ran 50+ customer discovery interviews that directly shaped a $2M feature investment."
-    }
+    "Scaled a 0→1 SaaS product from 10K to 600K users and contributed to $10M ARR growth.",
+    "Built a Career Paths module to 200K+ users, evolving it into a $500K ARR revenue stream.",
+    "Launched a Microsoft Teams Bot to 100K+ users, increasing profile updates by 254%.",
+    "Designed LLM-driven intent recognition with ~94% live accuracy across 47K messages.",
+    "Reduced onboarding time from 5 mins to under 2 mins through conversational UX.",
+    "Optimized platform performance to reduce p90 latency from 2–10s to under 500ms."
   ],
-  "industries_preferred": ["SaaS", "B2B", "Fintech", "Edtech", "Developer Tools", "Marketplace"],
-  "linkedin_url": "https://www.linkedin.com/in/yourprofile",
-  "portfolio_url": "",
-  "alumni_institutions": [],
   "notable_wins": [
-    "Shipped product used by Fortune 500 clients",
-    "Built 0-to-1 product that crossed 1L users in year 1"
+    "Positioned Prismforce among the top 100 companies in Microsoft’s Agent Store.",
+    "Secured a mandate for India’s National Centre for Additive Manufacturing driving $8M investment."
   ]
 }
