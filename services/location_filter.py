@@ -49,6 +49,8 @@ REMOTE_EXCLUSIONS = (
     "emea", "latam",
     "apac (ex ",  # "APAC (ex India)"
     "apac excluding",
+    # Dash-separated country codes — "Remote - US", "WFH - USA"
+    "- us", "- usa",
     # Parenthesised country codes — "Remote (US)", "Remote (UK)", etc.
     "(us)", "(usa)", "(u.s.)", "(u.s.a.)",
     "(uk)", "(u.k.)", "(eu)", "(emea)",
@@ -79,6 +81,8 @@ INDIA_NON_NCR_CITIES = (
 
 # Non-India cities (not exhaustive — enough to catch obvious global roles)
 NON_INDIA_CITIES = (
+    # USA metro areas (including shorthand)
+    "bay area", "sf bay", "silicon valley",
     # USA
     "san francisco", "new york", " nyc", "los angeles", " la ", "seattle", "boston",
     "chicago", "austin", "denver", "atlanta", "dallas", "houston", "portland",
