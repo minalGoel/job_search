@@ -70,17 +70,7 @@ A Remote-India-friendly card ending in `"CA, US"` would silently become a US job
 
 ---
 
-## 5. WeWorkRemotely region is a dedicated XML element, not description text
-
-WWR RSS items expose region restriction via a **dedicated `<region>` child element** on `<item>` (e.g., `<region>USA only</region>`, `<region>Anywhere in the World</region>`). The `<description>` CDATA body contains **no** `"Region:"` text substring.
-
-An older implementation used `re.compile(r"region\s*:?\s*([^<\n.]+)", re.IGNORECASE)` against the description body — this regex **never matches** the current feed format, so `raw_region` is always `""` and every job is stored as `location = "Remote"`, causing US-only and EU-only jobs to pass `is_acceptable_location()` and enter the database.
-
-**Fix (confirmed April 2026):** Read the element directly — `raw_region = item.findtext("region") or ""`  — then synthesise `"Remote — {raw_region}"` so `is_acceptable_location()` can reject restricted regions. See `scrapers/weworkremotely.py`.
-
----
-
-## 6. `dedup_hash` must include a location component
+## 5. `dedup_hash` must include a location component
 
 If `dedup_hash` is computed from `(company, title)` only, a London "Senior Product Manager" at Expedia and a Delhi "Senior Product Manager" at Expedia collide and the second insert is marked as a duplicate. Use `services.location_filter.normalize_region(loc)` as the third component of the hash: it maps all NCR variants to `"delhi-ncr"`, all clean global remote to `"remote"`, and preserves individual city names for others. See `models/job.py dedup_hash`.
 

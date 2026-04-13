@@ -10,7 +10,6 @@
 
 | Source | (a) Assumption Mismatches | (b) Edge Cases | (c) Efficiency/Correctness | Total | Severity |
 |--------|--------------------------|----------------|---------------------------|-------|----------|
-| WeWorkRemotely | **1 CRITICAL** | 1 | 1 | 3 | **Critical** |
 | Naukri | 0 | 1 | **1 CRITICAL** | 2 | **Critical** |
 | LinkedIn | 0 | 0 | 1 | 1 | High |
 | Wellfound | 0 | 0 | 1 | 1 | High |
@@ -70,33 +69,6 @@ logo:        ""
 
 ---
 
-### WeWorkRemotely RSS (`https://weworkremotely.com/categories/remote-product-jobs.rss`) — fetched 2026-04-07
-
-**Item 1 — raw XML structure:**
-```xml
-<item>
-  <title>Dlocal: Sr Data Product Manager</title>
-  <region>Anywhere in the World</region>
-  <country></country>
-  <state></state>
-  <skills></skills>
-  <category>Product</category>
-  <type>Full-Time</type>
-  <description><![CDATA[ ...HTML content, NO 'Region:' text... ]]></description>
-  <pubDate>Mon, 06 Apr 2026 20:35:01 +0000</pubDate>
-  <expires_at>Wed, 06 May 2026 20:35:01 +0000</expires_at>
-  <guid>https://weworkremotely.com/remote-jobs/dlocal-sr-data-product-manager</guid>
-  <link>https://weworkremotely.com/remote-jobs/dlocal-sr-data-product-manager</link>
-</item>
-```
-
-**Critical finding:** `<region>` is a **dedicated XML child element**, NOT embedded text inside `<description>`. The description CDATA contains **no** `"Region:"` text. The scraper's `_REGION_RE` regex runs against the stripped description body and will **never match** for any item because the description does not contain region text. The fix is `item.findtext("region")`.
-
-**Additional RSS element found:** `<type>Full-Time</type>` — not used by scraper (low priority).  
-**Additional RSS element found:** `<skills></skills>` — not used by scraper (low priority).
-
----
-
 ### Inc42 (`https://inc42.com/tag/funding/`) — fetched 2026-04-07
 
 The page returned structured JSON-LD (`@type: "NewsArticle"`) alongside rendered HTML. The exact CSS class names for article containers could not be confirmed from the rendered output — the page appears to use obfuscated or framework-generated class names. The scraper's selectors `"article, div[class*='post-card'], div[class*='article']"` are best-effort generic selectors. No hard breakage found but selector drift is a known risk.
@@ -104,56 +76,6 @@ The page returned structured JSON-LD (`@type: "NewsArticle"`) alongside rendered
 ---
 
 ## Per-Source Findings
-
----
-
-### WeWorkRemotely (`scrapers/weworkremotely.py`)
-
-#### (a) Assumption Mismatches
-
-**V-01 — CRITICAL: Region is a dedicated XML element, not description text**
-
-- **Assumption (pipelines_v1.md §2):** "Region information appears in description as `Region: {text}` — parse with regex `region\s*:?\s*([^<\n.]+)`"
-- **Reality:** The RSS `<item>` has a dedicated `<region>Anywhere in the World</region>` child element. The `<description>` CDATA body contains **no** `"Region:"` substring whatsoever. Live fetch confirmed this on 2026-04-07.
-- **File:** `scrapers/weworkremotely.py:14-15, 93-96`
-- **Evidence:**
-  ```python
-  # Line 15 — regex compiled against description text:
-  _REGION_RE = re.compile(r"region\s*:?\s*([^<\n.]+)", re.IGNORECASE)
-
-  # Lines 93-96 — applied to stripped description:
-  raw_region = ""
-  region_m = _REGION_RE.search(description)
-  if region_m:
-      raw_region = region_m.group(1).strip().strip(",")
-  ```
-- **Impact:** **Critical.** `_REGION_RE` never matches (description has no `"Region:"` text). `raw_region` is always `""`. `location` is always set to `"Remote"` (line 101). This means ALL WWR jobs — including US-only, EU-only, and Australia-only jobs — pass `is_acceptable_location("Remote")` and enter the database. The entire region-restriction filter is silently non-functional.
-- **Fix:** Replace the regex approach with `item.findtext("region") or ""` and use that directly:
-  ```python
-  raw_region = (item.findtext("region") or "").strip()
-  ```
-
-#### (b) Edge Cases Not Covered
-
-**V-02 — Medium: `<type>` and `<skills>` XML elements go unused**
-
-- The RSS feed exposes `<type>Full-Time</type>` and `<skills></skills>` elements that the scraper ignores.
-- **File:** `scrapers/weworkremotely.py:54-125`
-- **Impact:** Low (job type and skills data is available but not captured). The `<skills>` element appears to always be empty in practice, but `<type>` provides employment type data.
-
-#### (c) Efficiency/Correctness Issues
-
-**V-03 — Medium: Hardcoded PM keyword set ignores `self.search_params`**
-
-- **File:** `scrapers/weworkremotely.py:33-35`
-- **Evidence:**
-  ```python
-  pm_keywords = {"product manager", "product management", "senior pm",
-                  "head of product", "director product", "vp product",
-                  "product lead"}
-  ```
-- If `SearchParams.title_keywords` is changed to `["Product Lead"]` or `["Head of Product"]`, the WWR scraper still searches with this hardcoded set. See `known_edge_cases.md §7`.
-- **Impact:** Low (the hardcoded set is broad and covers most PM variants, but it's a maintenance risk).
 
 ---
 
@@ -192,7 +114,7 @@ The page returned structured JSON-LD (`@type: "NewsArticle"`) alongside rendered
 **V-06 — Low: Hardcoded PM keyword set ignores `self.search_params`**
 
 - **File:** `scrapers/remoteok.py:38-39`
-- Same issue as V-03 (WeWorkRemotely). pm_keywords are hardcoded.
+- pm_keywords are hardcoded; does not read from `self.search_params`.
 - **Impact:** Low.
 
 ---
@@ -431,11 +353,10 @@ The following is a summary of each checklist item from the audit protocol:
 | Check | Finding |
 |-------|---------|
 | **A. Location filter gaps** | 5 scrapers skip per-job filtering: linkedin, wellfound, indeed, iimjobs, instahyre. Hirist uses its own inline keyword set (V-14, Critical). All rely on the pipeline gate in `main.py` as the only defense. |
-| **B. Search query hardcoding** | remoteok, weworkremotely, ycombinator all use hardcoded `pm_keywords` sets independent of `self.search_params.title_keywords[0]`. iimjobs and instahyre correctly use `search_params`. LinkedIn and others use `search_params` for the query string. |
+| **B. Search query hardcoding** | remoteok, ycombinator all use hardcoded `pm_keywords` sets independent of `self.search_params.title_keywords[0]`. iimjobs and instahyre correctly use `search_params`. LinkedIn and others use `search_params` for the query string. |
 | **C. Naukri placeholder ordering** | CORRECT. `scrapers/naukri.py:144-151` iterates by `ph["type"]` and builds `by_type` dict. Positional bug is fixed. |
 | **D. Resource leak patterns** | naukri `_scrape_page` has a page leak if `_parse_html` raises (V-07). vc_portals `_get_page` swallows goto exceptions and does not close the page (V-16). All API endpoints in `api/server.py` use `try/finally: db.close()` — correct. |
 | **E. `_safe_scrape` return type** | CORRECT. `scrapers/base.py:77-92` returns `tuple[list[Job], str | None]`. `main.py:67-68` correctly unpacks `jobs, scrape_error = await task`. |
-| **F. WWR region parsing** | BROKEN. Regex searches description for `"Region:"` text, but the real RSS uses a dedicated `<region>` XML element. Description contains no such text. (V-01, Critical.) |
 | **G. YC first-match-wins** | CORRECT. `scrapers/ycombinator.py:144-146`: `if not location and any(...)` — guards ensure only the first match sets `location`. |
 | **H. Apollo rate limiter** | CORRECT. `outreach/apollo_client.py:154-175` uses token-bucket pattern with `_last_call_ts`. Guards `if self.rate_limit is None or self.rate_limit <= 0: return` prevents ZeroDivisionError. |
 | **I. Company slug consistency** | CORRECT. `outreach/db.py:92-113` imports `_company_slug` from `services.scoring` and uses it for both the target and each existing contact. Fallback on import error uses raw lowercase. |
@@ -454,7 +375,6 @@ The following is a summary of each checklist item from the audit protocol:
 
 | Priority | Finding | File | Fix |
 |----------|---------|------|-----|
-| P0 | **V-01** WWR region always `"Remote"` | `scrapers/weworkremotely.py:93-96` | Replace `_REGION_RE.search(description)` with `item.findtext("region") or ""` |
 | P0 | **V-14** Hirist inline keyword filter | `scrapers/hirist.py:23, 102-104` | Replace with `from services.location_filter import is_acceptable_location` and call it per job |
 | P0 | **V-07** Naukri page leak | `scrapers/naukri.py:103-125` | Wrap `_scrape_page` body in `try/finally: if page: await page.close()` |
 | P0 | **V-16** VC portal `_get_page` swallows goto | `vc_portals/scraper.py:251-260` | Close page and re-raise on exception (match `mnc_careers/scraper.py` pattern) |
@@ -468,13 +388,11 @@ The following is a summary of each checklist item from the audit protocol:
 | P3 | **V-05** RemoteOK `$0 - $0` salary | `scrapers/remoteok.py:51` | Change condition to `if salary_min and salary_max` |
 | P3 | **V-12** IIMJobs no per-job location filter | `scrapers/iimjobs.py` | Add `is_acceptable_location(location)` per job |
 | P3 | **V-15** Instahyre no per-job location filter | `scrapers/instahyre.py` | Same |
-| P3 | **V-03, V-06** Hardcoded pm_keywords | `scrapers/weworkremotely.py:33`, `scrapers/remoteok.py:38` | Add `self.search_params.title_keywords[0]` to the keyword set or derive from it |
+| P3 | **V-06** Hardcoded pm_keywords | `scrapers/remoteok.py:38` | Add `self.search_params.title_keywords[0]` to the keyword set or derive from it |
 | P3 | **V-17** Inc42 selector may miss articles | `funding/scanner.py:149` | Verify selectors against live HTML; add JSON-LD fallback extraction |
 
 ---
 
 ## New Edge Cases to Add to `known_edge_cases.md`
 
-1. **WWR `<region>` is a dedicated XML element, not description text.** The comment "WWR posts always include 'Region: ...' in the description" (added to fix the original bug) was based on an older version of the RSS feed. The current feed uses `<region>` as a first-class XML child of `<item>`. Fix: `item.findtext("region")`.
-
-2. **RemoteOK has two URL fields: `url` (listing page) and `apply_url` (employer ATS link).** Using `url` as the apply link sends candidates to RemoteOK's own job listing page instead of the employer's application form.
+1. **RemoteOK has two URL fields: `url` (listing page) and `apply_url` (employer ATS link).** Using `url` as the apply link sends candidates to RemoteOK's own job listing page instead of the employer's application form.

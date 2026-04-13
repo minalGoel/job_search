@@ -509,7 +509,6 @@ PLATFORM_META: dict[str, dict] = {
     "glassdoor":      {"label": "Glassdoor",         "icon": "🪟", "color": "teal"},
     "hirist":         {"label": "Hirist",            "icon": "👨‍💻", "color": "cyan"},
     "remoteok":       {"label": "RemoteOK",          "icon": "🌍", "color": "green"},
-    "weworkremotely": {"label": "WeWorkRemotely",    "icon": "🏠", "color": "slate"},
     "ycombinator":    {"label": "YCombinator",       "icon": "🚀", "color": "yellow"},
     "weekday":        {"label": "Weekday",           "icon": "📅", "color": "violet"},
 }

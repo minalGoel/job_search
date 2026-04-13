@@ -23,7 +23,7 @@ Every ingestion source produces `Job` instances. Key computed fields:
   - `title_stripped` = `_strip_title_decorators()` (removes `- Remote`, `- Hybrid`, `- Delhi`, etc.)
   - `region` = `services.location_filter.normalize_region(location)` (maps to canonical `"delhi-ncr"`, `"remote"`, etc.)
 
-**Critical assumption:** `dedup_hash` includes a location component so that London-Expedia and Delhi-Expedia do not collide. See known_edge_cases.md §6.
+**Critical assumption:** `dedup_hash` includes a location component so that London-Expedia and Delhi-Expedia do not collide. See known_edge_cases.md §5.
 
 ### `scrapers/base.py` — BaseScraper
 
@@ -171,104 +171,7 @@ for item in listings:
 
 ---
 
-## 2. WeWorkRemotely (`scrapers/weworkremotely.py`)
-
-### Overview
-- Type: RSS feed (XML)
-- Requires Playwright: No
-- Requires auth: No
-
-### Request Construction
-- URLs (2 feeds):
-  - `https://weworkremotely.com/categories/remote-product-jobs.rss`
-  - `https://weworkremotely.com/categories/remote-management-and-finance-jobs.rss`
-- Auth: none
-- Headers: `User-Agent: JobSearchAggregator/1.0`
-- Pagination: none — RSS feed contains current listings
-- Rate limiting: none; one GET per feed
-
-### Pseudocode
-```
-pm_keywords = {"product manager", "product management", "senior pm",
-               "head of product", "director product", "vp product", "product lead"}
-
-for feed_url in [product_feed, management_feed]:
-    resp = GET feed_url, timeout=30
-    jobs.extend(_parse_rss(resp.text, pm_keywords))
-
-def _parse_rss(xml_text, pm_keywords):
-    root = ET.fromstring(xml_text)
-
-    for item in root.findall(".//item"):
-        title = item.findtext("title").strip()
-        if not any(kw in title.lower() for kw in pm_keywords):
-            continue
-
-        link = item.findtext("link").strip()
-        description = strip_html(item.findtext("description"))
-
-        pub_date = item.findtext("pubDate")
-        posted_date = datetime.strptime(pub_date, "%a, %d %b %Y %H:%M:%S %z").date()
-
-        # Company extraction from "Company: Job Title" format
-        company = ""
-        if ":" in title:
-            parts = title.split(":", 1)
-            company = parts[0].strip()
-            title   = parts[1].strip()
-
-        skills = [cat.text for cat in item.findall("category") if cat.text]
-
-        # Region extraction from description — critical for location filter
-        region_match = re.search(r"region\s*:?\s*([^<\n.]+)", description, IGNORECASE)
-        if region_match:
-            raw_region = region_match.group(1).strip().strip(",")
-            location = f"Remote — {raw_region}"
-        else:
-            location = "Remote"
-
-        if title and link:
-            if not is_acceptable_location(location):
-                log debug; continue
-            yield Job(platform="weworkremotely", ...)
-```
-
-### Schema Mapping
-| Raw field | Target Job field | Extraction method | Type assumption |
-|-----------|-----------------|-------------------|-----------------|
-| `<title>` | `title`, `company` | split on first `:` — left = company, right = title | format: "Company: Title" |
-| `<link>` | `apply_link` | `item.findtext("link")` | absolute URL string |
-| `<description>` (body) | `description` | HTML stripped, truncated to 2000 | HTML-containing CDATA |
-| `<description>` (region) | `location` | regex `region\s*:?\s*([^<\n.]+)` | inline text in description |
-| `<pubDate>` | `posted_date` | `strptime("%a, %d %b %Y %H:%M:%S %z")` | RFC 2822 date string |
-| `<category>` elements | `skills` | list of `cat.text` | string |
-
-### Explicit Assumptions
-- Assumes title format is always `"Company: Job Title"` — no company if no colon
-- Assumes region information appears in description as `"Region: {text}"` or `"Region {text}"`
-- Assumes RSS pubDate follows RFC 2822 exactly (`"%a, %d %b %Y %H:%M:%S %z"`)
-- Assumes both RSS feed URLs remain stable
-- Assumes `<category>` elements contain skill/tag text
-
-### Known Failure Modes
-- **Critical (fixed):** If region is not extracted from description and location defaults to `"Remote"`, US-only jobs pass the location filter. See known_edge_cases.md §5. The fix is the `_REGION_RE` regex extraction.
-- Job titles without `:` produce empty company name — the Job model accepts empty company (no guard)
-- If `<pubDate>` format changes, `strptime` raises `ValueError` and `posted_date = None`
-- If RSS changes to put region info in a different field, the regex fails and all jobs pass with `"Remote"` location
-- No title-keyword filter uses `self.search_params`; pm_keywords hardcoded (see known_edge_cases.md §7)
-- Errors on individual RSS items are caught per-item; errors fetching an entire feed only log an exception and skip that feed entirely
-
-### Null/Missing Field Handling
-- `<title>` absent → empty string → item is skipped (guard: `if title and link`)
-- `<link>` absent → empty string → item is skipped
-- `<description>` absent → empty string, no region extracted → location becomes `"Remote"`
-- `<pubDate>` parse failure → `posted_date = None`
-- `<category>` absent → `skills = []`
-- Company absent (no colon in title) → `company = ""`, job still appended
-
----
-
-## 3. Naukri (`scrapers/naukri.py`)
+## 2. Naukri (`scrapers/naukri.py`)
 
 ### Overview
 - Type: XHR JSON API interception + HTML fallback
@@ -1659,14 +1562,13 @@ Scrapers that do NOT apply location filters (potential gap):
 - **Instahyre** — relies on `jobLocations="Delhi / NCR"` API param; no per-job filter
 
 Scrapers that DO apply per-job `is_acceptable_location()`:
-- RemoteOK, WeWorkRemotely, YCombinator, VC Portals, MNC Careers, Funding Scanner (LinkedIn check)
+- RemoteOK, YCombinator, VC Portals, MNC Careers, Funding Scanner (LinkedIn check)
 
 ### Description Fetch Patterns
 
 | Scraper | Description Strategy | Resource Leak Risk |
 |---------|---------------------|-------------------|
 | RemoteOK | Inline in API response; HTML stripped | None |
-| WeWorkRemotely | RSS `<description>` element; HTML stripped | None |
 | Naukri (API path) | `jobDescription` field inline | None |
 | Naukri (HTML path) | Separate page load per card | try/finally with `page=None` sentinel |
 | IIMJobs | Always `""` | None |
@@ -1684,7 +1586,6 @@ Scrapers that DO apply per-job `is_acceptable_location()`:
 | Scraper | Platform value | Dynamic? |
 |---------|---------------|----------|
 | RemoteOK | `"remoteok"` | No |
-| WeWorkRemotely | `"weworkremotely"` | No |
 | Naukri | `"naukri"` | No |
 | IIMJobs | `"iimjobs"` | No |
 | LinkedIn | `"linkedin"` | No |
@@ -1708,7 +1609,6 @@ Scrapers that DO apply per-job `is_acceptable_location()`:
 | Indeed | Yes | Used in `q=` param |
 | Instahyre | Yes (with fallback `"product management"`) | `getattr` fallback |
 | RemoteOK | No | Hardcoded pm_keywords set |
-| WeWorkRemotely | No | Hardcoded pm_keywords set |
 | Wellfound | No | Hardcoded URL `?role=product-manager` |
 | YCombinator | No | Hardcoded URL `/role/product-manager` |
 | Hirist | No | Hardcoded `categoryId=12` |

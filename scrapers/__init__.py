@@ -11,7 +11,6 @@ from .linkedin import LinkedInScraper
 from .instahyre import InstahyreScraper
 from .glassdoor import GlassdoorScraper
 from .remoteok import RemoteOKScraper
-from .weworkremotely import WeWorkRemotelyScraper
 from .hirist import HiristScraper
 from .ycombinator import YCombinatorScraper
 from .weekday import WeekdayScraper
@@ -31,7 +30,6 @@ SCRAPER_REGISTRY: dict[str, type[BaseScraper]] = {
     # "glassdoor": GlassdoorScraper,  # DISABLED: low signal for PM roles, Cloudflare blocking issues
     # Remote-first platforms
     "remoteok": RemoteOKScraper,
-    "weworkremotely": WeWorkRemotelyScraper,
     # Startup ecosystem
     "ycombinator": YCombinatorScraper,
     "weekday": WeekdayScraper,
