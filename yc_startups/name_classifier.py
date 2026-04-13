@@ -23,8 +23,8 @@ from sklearn.pipeline import Pipeline
 # Dual-threshold: require high confidence from a single model, OR moderate
 # confidence from BOTH models agreeing.  This eliminates false positives
 # where only the last-name model fires on a non-Indian surname.
-THRESHOLD_SINGLE = 0.75   # one model alone must be very confident
-THRESHOLD_BOTH   = 0.55   # lower bar when both models agree
+THRESHOLD_SINGLE = 0.88   # one model alone must be very confident
+THRESHOLD_BOTH   = 0.65   # lower bar when both models agree
 
 DATA_DIR = Path(__file__).parent / "data"
 MODELS_DIR = Path(__file__).parent / "models"
@@ -59,7 +59,7 @@ def _train_model(indian_path: Path, non_indian_path: Path, model_name: str) -> P
     )
 
     pipeline = Pipeline([
-        ("tfidf", TfidfVectorizer(analyzer="char_wb", ngram_range=(2, 4), min_df=2)),
+        ("tfidf", TfidfVectorizer(analyzer="char_wb", ngram_range=(2, 5), min_df=1)),
         ("clf", LogisticRegression(C=5, max_iter=1000, random_state=42)),
     ])
 
@@ -185,16 +185,21 @@ def classify(full_name: str) -> dict:
             "matched_on": "neither",
         }
 
+    # For hyphenated first names (e.g. "Jan-Hendrik"), use only the part before
+    # the hyphen — the full hyphenated string contains n-grams from both parts
+    # and produces unreliable scores.
+    first_token = tokens[0].lower().split("-")[0]
+
     if len(tokens) == 1:
-        # Single token — run both models, take max
-        first_score = float(_first_model.predict_proba([tokens[0].lower()])[0][1])
-        last_score = float(_last_model.predict_proba([tokens[0].lower()])[0][1])
+        # Single token — run both models on the same (de-hyphenated) token
+        first_score = float(_first_model.predict_proba([first_token])[0][1])
+        last_score = float(_last_model.predict_proba([first_token])[0][1])
     elif len(tokens) == 2:
-        first_score = float(_first_model.predict_proba([tokens[0].lower()])[0][1])
+        first_score = float(_first_model.predict_proba([first_token])[0][1])
         last_score = float(_last_model.predict_proba([tokens[1].lower()])[0][1])
     else:
         # 3+ tokens: first = first name, last = last name, middle ignored
-        first_score = float(_first_model.predict_proba([tokens[0].lower()])[0][1])
+        first_score = float(_first_model.predict_proba([first_token])[0][1])
         last_score = float(_last_model.predict_proba([tokens[-1].lower()])[0][1])
 
     is_indian, matched_on = _is_indian(first_score, last_score)
@@ -233,10 +238,12 @@ def classify_batch(names: list[str]) -> list[dict]:
             first_tokens.append("")
             last_tokens.append("")
         elif len(tokens) == 1:
-            first_tokens.append(tokens[0].lower())
-            last_tokens.append(tokens[0].lower())
+            # De-hyphenate: "Jan-Hendrik" → "Jan"
+            ft = tokens[0].lower().split("-")[0]
+            first_tokens.append(ft)
+            last_tokens.append(ft)
         else:
-            first_tokens.append(tokens[0].lower())
+            first_tokens.append(tokens[0].lower().split("-")[0])
             last_tokens.append(tokens[-1].lower())
 
     # Vectorized prediction

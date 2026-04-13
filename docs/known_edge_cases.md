@@ -185,3 +185,20 @@ Using `item.get("url")` as the apply destination sends candidates back to the Re
 ## 18. Documentation–code drift
 
 `CLAUDE.md` stated that `_company_slug()` "strips punctuation and legal suffixes" but the actual implementation only stripped punctuation. The docs were right; the code was wrong for months. **When auditing, always cross-check docs against the implementation** — either can be the bug.
+
+---
+
+## 20. Indian name classifier: three pitfalls that cause silent mis-classification
+
+The offline ML classifier (`yc_startups/name_classifier.py`, `build_training_data.py`) has several non-obvious failure modes:
+
+| Pitfall | Symptom | Fix |
+|---|---|---|
+| **Random downsampling drops known names** | "Arjun Mehta" → not Indian (f=0.580) — "arjun" was randomly excluded when 3,724 Indian first names were downsampled to 918 | `build_training_data()` now keeps ALL 556 hand-curated `INDIAN_FIRST_NAMES` guaranteed; only `CSV_INDIAN_FIRST_NAMES` is randomly sampled to fill remaining 2:1 budget |
+| **`AMBIGUOUS_EXCLUSIONS` removes non-Indian training signal** | "Carlos Garcia" classified as Indian (l=0.823) — "garcia" was in `AMBIGUOUS_EXCLUSIONS`, removing it from BOTH training sets; model never learned it as non-Indian | Spanish/Latin surnames removed from `AMBIGUOUS_EXCLUSIONS`; non-ambiguous for Indian classification and must stay in the non-Indian training set |
+| **Hyphenated first names produce spurious n-grams** | "Jan-Hendrik Ruettinger" → classified as Indian — "jan-hendrik" feeds n-grams like "ndr", "dri" (from "hendrik") that resemble Indian names | `classify()` and `classify_batch()` split on `-` and use only the pre-hyphen token for the first-name model |
+| **n-gram range too narrow misses short distinctive names** | "gupta", "mehta" scored below threshold — with `ngram_range=(2,4)`, a 5-char name never appears as a complete n-gram feature | Changed to `ngram_range=(2,5)` + `min_df=1` |
+
+**Threshold:** `THRESHOLD_SINGLE=0.88` (not 0.80) eliminates Hebrew "sha-" false positives (Shahar l=0.856) and Spanish surname false positives (Garcia l=0.875) while retaining all standard Indian names via the `THRESHOLD_BOTH=0.65` dual-threshold path.
+
+**Training data:** curated first names (`INDIAN_FIRST_NAMES`) and CSV supplement (`CSV_INDIAN_FIRST_NAMES`) are kept in separate sets so priority-based balancing always includes curated names. Last names: `HIGH_QUALITY_LAST_NAMES` (545 entries from `last names.csv`) supplements via set union.

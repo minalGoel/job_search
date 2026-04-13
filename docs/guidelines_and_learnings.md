@@ -282,3 +282,21 @@ See `services/semantic_scorer.py` for the reference implementation.
 3. **E2E runtime test** — start the server, hit the endpoint with `curl`, check the response. This is where you catch middleware ordering, async shadowing, and port/process-lifecycle issues.
 
 Always run all three layers before declaring a fix done.
+
+---
+
+## 21. ML training data: always guarantee your most critical examples survive sampling
+
+When balancing a training dataset to a 2:1 ratio by random downsampling, small but important examples (hand-curated, verified correct) can be silently dropped. "Arjun Mehta" failed because "arjun" had a ~80% chance of being excluded when 3,724 Indian first names were randomly sampled down to 918.
+
+**Rule:** Partition your training data into **priority** (hand-curated, must-always-include) and **supplement** (large CSV/scraped set, safe to sample). Only randomly sample from the supplement to fill the remaining budget after the priority set is committed.
+
+```python
+def _balance_with_priority(curated, supplement, neg):
+    target = len(neg) * 2
+    remaining = target - len(curated)
+    extra = set(random.sample(sorted(supplement), min(remaining, len(supplement))))
+    return curated | extra, neg   # curated names are guaranteed
+```
+
+**Corollary for `AMBIGUOUS_EXCLUSIONS`:** only include names that are genuinely ambiguous across the target classification (e.g. "singh" — used by Sikhs but also non-Indians). Do NOT add clearly non-Indian names (Spanish, East Asian, etc.) to the exclusion list — they belong in the non-Indian training set. A name in `AMBIGUOUS_EXCLUSIONS` is removed from BOTH sides, robbing the model of a useful negative example.
