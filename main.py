@@ -1075,6 +1075,46 @@ def purge_jobs(
 # ─── YC Startups ─────────────────────────────────────────────────────────────
 
 
+@app.command(name="purge-titles")
+def purge_titles(
+    yes: bool = typer.Option(False, "--yes", "-y", help="Skip confirmation"),
+) -> None:
+    """
+    Remove jobs whose title does not contain both 'product' and 'manager'.
+
+    Jobs with existing application tracker rows are always preserved.
+    Run this once after deploying the title filter to clean up historical data.
+    """
+    from storage.db import JobDB
+    _configure_logging()
+
+    db = JobDB()
+    try:
+        to_delete = db.conn.execute(
+            """SELECT COUNT(*) FROM jobs
+               WHERE (LOWER(title) NOT LIKE '%product%' OR LOWER(title) NOT LIKE '%manager%')
+               AND id NOT IN (SELECT job_id FROM applications WHERE job_id IS NOT NULL)"""
+        ).fetchone()[0]
+
+        if to_delete == 0:
+            typer.echo("  No irrelevant titles found — DB is already clean.")
+            return
+
+        typer.echo(f"\n  Found {to_delete} jobs with titles that don't match 'product' + 'manager'.")
+        typer.echo("  Jobs with application tracker rows will be preserved.\n")
+
+        if not yes:
+            confirm = typer.confirm("  Delete them?")
+            if not confirm:
+                typer.echo("  Aborted.")
+                return
+
+        deleted = db.purge_irrelevant_titles()
+        typer.echo(f"\n  ✓ Deleted {deleted} jobs. Run `python main.py recommend --rescore` to refresh scores.\n")
+    finally:
+        db.close()
+
+
 @app.command(name="yc-sync")
 def yc_sync(
     batch: Optional[str] = typer.Option(None, "--batch", "-b", help="Filter by YC batch (e.g. S24, W24)"),

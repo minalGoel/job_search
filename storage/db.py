@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Optional
 
 from models.job import Job
+from services.title_filter import is_relevant_title
 
 
 # ─── Canonical application status vocabulary ──────────────────────────────────
@@ -277,7 +278,13 @@ class JobDB:
         return row is not None
 
     def insert_job(self, job: Job) -> bool:
-        """Insert a job if it doesn't already exist. Returns True if inserted."""
+        """Insert a job if it doesn't already exist. Returns True if inserted.
+
+        Silently rejects jobs whose title does not contain both 'product' and
+        'manager' — see services/title_filter.py for the single source of truth.
+        """
+        if not is_relevant_title(job.title):
+            return False
         if self.job_exists(job.id):
             return False
         self.conn.execute(
@@ -306,6 +313,29 @@ class JobDB:
             else:
                 skipped += 1
         return inserted, skipped
+
+    def purge_irrelevant_titles(self) -> int:
+        """Delete existing jobs whose title fails the title filter.
+
+        Skips any job that has a row in the applications table (shortlisted,
+        applied, etc.) so tracked applications are never silently removed.
+        Returns the count of deleted rows.
+        """
+        cur = self.conn.execute(
+            """SELECT id FROM jobs
+               WHERE (LOWER(title) NOT LIKE '%product%' OR LOWER(title) NOT LIKE '%manager%')
+               AND id NOT IN (SELECT job_id FROM applications WHERE job_id IS NOT NULL)"""
+        )
+        ids = [row[0] for row in cur.fetchall()]
+        if not ids:
+            return 0
+        placeholders = ",".join("?" * len(ids))
+        self.conn.execute(
+            f"DELETE FROM job_connection_matches WHERE job_id IN ({placeholders})", ids
+        )
+        self.conn.execute(f"DELETE FROM jobs WHERE id IN ({placeholders})", ids)
+        self.conn.commit()
+        return len(ids)
 
     def get_jobs_by_dedup_hash(self, dedup_hash: str) -> list[dict]:
         rows = self.conn.execute(
