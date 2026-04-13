@@ -20,7 +20,11 @@ from sklearn.metrics import classification_report
 from sklearn.model_selection import train_test_split
 from sklearn.pipeline import Pipeline
 
-THRESHOLD = 0.6
+# Dual-threshold: require high confidence from a single model, OR moderate
+# confidence from BOTH models agreeing.  This eliminates false positives
+# where only the last-name model fires on a non-Indian surname.
+THRESHOLD_SINGLE = 0.75   # one model alone must be very confident
+THRESHOLD_BOTH   = 0.55   # lower bar when both models agree
 
 DATA_DIR = Path(__file__).parent / "data"
 MODELS_DIR = Path(__file__).parent / "models"
@@ -133,12 +137,38 @@ def _init_models() -> tuple[Pipeline, Pipeline]:
 _first_model, _last_model = _init_models()
 
 
-def classify(full_name: str, threshold: float = THRESHOLD) -> dict:
+def _is_indian(first_score: float, last_score: float) -> tuple[bool, str]:
+    """Apply dual-threshold logic to determine Indian classification.
+
+    Returns (is_indian, matched_on) tuple.
+    """
+    both_moderate = first_score >= THRESHOLD_BOTH and last_score >= THRESHOLD_BOTH
+    first_strong = first_score >= THRESHOLD_SINGLE
+    last_strong = last_score >= THRESHOLD_SINGLE
+
+    if both_moderate:
+        matched_on = "both"
+        is_indian = True
+    elif first_strong:
+        matched_on = "first"
+        is_indian = True
+    elif last_strong:
+        matched_on = "last"
+        is_indian = True
+    else:
+        matched_on = "neither"
+        is_indian = False
+
+    return is_indian, matched_on
+
+
+def classify(full_name: str) -> dict:
     """Classify a single name as Indian or non-Indian.
 
-    Args:
-        full_name: Full name string (first, last, or full name).
-        threshold: Probability threshold for Indian classification.
+    Uses dual-threshold: requires EITHER very high confidence from one model
+    (>= THRESHOLD_SINGLE) OR moderate confidence from BOTH models agreeing
+    (>= THRESHOLD_BOTH).  This eliminates false positives where only the
+    last-name n-gram model fires on a non-Indian surname.
 
     Returns:
         Dict with keys: name, is_indian, confidence, first_name_score,
@@ -167,18 +197,7 @@ def classify(full_name: str, threshold: float = THRESHOLD) -> dict:
         first_score = float(_first_model.predict_proba([tokens[0].lower()])[0][1])
         last_score = float(_last_model.predict_proba([tokens[-1].lower()])[0][1])
 
-    first_match = first_score >= threshold
-    last_match = last_score >= threshold
-    is_indian = first_match or last_match
-
-    if first_match and last_match:
-        matched_on = "both"
-    elif first_match:
-        matched_on = "first"
-    elif last_match:
-        matched_on = "last"
-    else:
-        matched_on = "neither"
+    is_indian, matched_on = _is_indian(first_score, last_score)
 
     return {
         "name": full_name,
@@ -190,12 +209,11 @@ def classify(full_name: str, threshold: float = THRESHOLD) -> dict:
     }
 
 
-def classify_batch(names: list[str], threshold: float = THRESHOLD) -> list[dict]:
+def classify_batch(names: list[str]) -> list[dict]:
     """Classify a batch of names using vectorized prediction.
 
     Args:
         names: List of full name strings.
-        threshold: Probability threshold for Indian classification.
 
     Returns:
         List of classification result dicts (same format as classify()).
@@ -241,23 +259,12 @@ def classify_batch(names: list[str], threshold: float = THRESHOLD) -> list[dict]
         for idx, prob in zip(indices, probs):
             last_scores[idx] = prob
 
-    # Build results
+    # Build results using dual-threshold logic
     results = []
     for i, name in enumerate(names):
         fs = float(first_scores[i])
         ls = float(last_scores[i])
-        first_match = fs >= threshold
-        last_match = ls >= threshold
-        is_indian = first_match or last_match
-
-        if first_match and last_match:
-            matched_on = "both"
-        elif first_match:
-            matched_on = "first"
-        elif last_match:
-            matched_on = "last"
-        else:
-            matched_on = "neither"
+        is_indian, matched_on = _is_indian(fs, ls)
 
         results.append({
             "name": name,
