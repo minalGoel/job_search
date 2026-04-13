@@ -24,6 +24,10 @@ credentials/
 *.swp
 *.swo
 
+# Name classifier data and models
+yc_startups/data/
+yc_startups/models/
+
 # OS
 .DS_Store
 Thumbs.db
