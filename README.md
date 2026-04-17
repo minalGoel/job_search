@@ -337,10 +337,10 @@ python main.py purge-jobs --before "2025-12-01"
 
 ```bash
 # ── Search Parameters ────────────────────────────────
-SEARCH_TITLES=Senior Product Manager,Senior PM,Principal PM
+SEARCH_TITLES=Senior Product Manager, Product Manager, PM, Senior PM,Principal PM, Lead PM
 SEARCH_LOCATION=Delhi,NCR,Bangalore,Remote
 MIN_EXPERIENCE=5
-MAX_EXPERIENCE=7
+MAX_EXPERIENCE=10
 MIN_SALARY=4000000  # 40 LPA in paisa
 MAX_SALARY=8000000  # 80 LPA
 

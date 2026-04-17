@@ -928,10 +928,30 @@ def get_yc_company(company_id: str) -> dict:
 
 
 @app.get("/api/yc/founders")
-def list_yc_founders() -> list[dict]:
+def list_yc_founders(
+    batch: Optional[str] = Query(None),
+    hiring_only: bool = Query(False),
+    hiring_pm_only: bool = Query(False),
+    indian_founders_only: bool = Query(False),
+    locations: Optional[str] = Query(None),
+    industries: Optional[str] = Query(None),
+    team_size_min: int = Query(0),
+    search: str = Query(""),
+) -> list[dict]:
     db = _jobs_db()
     try:
-        return db.get_yc_all_founder_contacts()
+        loc_list = [l.strip() for l in locations.split(",")] if locations else None
+        ind_list = [i.strip() for i in industries.split(",")] if industries else None
+        return db.get_yc_founders_filtered(
+            batch=batch,
+            hiring_only=hiring_only,
+            hiring_pm_only=hiring_pm_only,
+            indian_founders_only=indian_founders_only,
+            locations=loc_list,
+            industries=ind_list,
+            team_size_min=team_size_min,
+            search=search,
+        )
     finally:
         db.close()
 

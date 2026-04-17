@@ -993,6 +993,39 @@ class JobDB:
         ).fetchall()
         return [dict(r) for r in rows]
 
+    def get_yc_founders_filtered(
+        self,
+        batch: Optional[str] = None,
+        hiring_only: bool = False,
+        hiring_pm_only: bool = False,
+        indian_founders_only: bool = False,
+        locations: Optional[list[str]] = None,
+        industries: Optional[list[str]] = None,
+        team_size_min: int = 0,
+        search: str = "",
+    ) -> list[dict]:
+        """Query YC founder contacts filtered by company-level criteria."""
+        conditions, params = self._build_yc_conditions(
+            batch=batch, hiring_only=hiring_only, hiring_pm_only=hiring_pm_only,
+            indian_founders_only=indian_founders_only, locations=locations,
+            industries=industries, team_size_min=team_size_min, search=search,
+        )
+        if conditions:
+            sub_where = f"WHERE {' AND '.join(conditions)}"
+            full_where = f"WHERE fc.yc_company_id IN (SELECT id FROM yc_companies {sub_where})"
+        else:
+            full_where = ""
+        sql = (
+            f"SELECT fc.founder_name, fc.founder_linkedin, fc.founder_title, "
+            f"fc.yc_company_id, yc.company_name, yc.batch, yc.company_slug "
+            f"FROM yc_founder_contacts fc "
+            f"JOIN yc_companies yc ON fc.yc_company_id = yc.id "
+            f"{full_where} "
+            f"ORDER BY yc.batch DESC, yc.company_name, fc.founder_name"
+        )
+        rows = self.conn.execute(sql, params).fetchall()
+        return [dict(r) for r in rows]
+
     def get_yc_stats(self) -> dict:
         """Return aggregate YC stats for the dashboard."""
         stats: dict = {}
