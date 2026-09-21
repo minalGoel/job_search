@@ -177,6 +177,22 @@ def resolve(
     return res
 
 
+_COARSE_REASONS = ("India (country-level)", "pure remote", "unrecognised", "empty")
+
+
+def needs_detail(listing_location: str) -> bool:
+    """Should the gate spend a detail request on this listing?
+
+    Yes when the listing already passes (we keep it, so we want the real address) or when
+    it is coarse — country-level "India", "3 Locations", "Remote", blank. No when it names a
+    specific non-NCR city/state or another country: the listing is right about *that*.
+    """
+    listing = (listing_location or "").strip()
+    if not listing or is_acceptable_location(listing):
+        return True
+    return explain(listing).startswith(_COARSE_REASONS)
+
+
 def passes(listing_location: str, enrichment: Optional[dict[str, Any]]) -> bool:
     """The one predicate every gate uses: the stored verdict when we have one, else the
     listing-string rule (identical to today's behaviour for un-enriched jobs)."""
@@ -200,4 +216,4 @@ def resolution_from_row(row: dict[str, Any]) -> Optional[dict]:
     }
 
 
-__all__ = ["Resolution", "resolve", "passes", "resolution_from_row", "asdict"]
+__all__ = ["Resolution", "resolve", "passes", "needs_detail", "resolution_from_row", "asdict"]

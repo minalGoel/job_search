@@ -7,18 +7,23 @@ most of a full listing.
 
 Never falls back to ``mnc.delhi_ncr_office`` for an empty location
 (known_edge_cases §11: an unknown location must be rejected, not assumed).
+
+Since Sept 2026 the location verdict comes from ``services.location_resolver`` and
+uses the job's *structured detail record* (job page / ATS detail API) when the
+caller fetched one — "India (Hybrid)" with a Bangalore office address is rejected.
 """
 from __future__ import annotations
 
-from dataclasses import dataclass
-from typing import Any
+from dataclasses import dataclass, field
+from typing import Any, Optional
 
 import structlog
 
 from models.job import Job
 from mnc_careers.ats.base import RawPosting
 from mnc_careers.registry import MNC, platform_for
-from services.location_filter import explain as explain_location, is_acceptable_location
+from services.job_detail import DetailRecord
+from services.location_resolver import Resolution, resolve
 from services.title_filter import explain_title, is_relevant_title
 
 log = structlog.get_logger(__name__)
@@ -32,13 +37,31 @@ class FilterStats:
     title_rejected: int = 0
     location_rejected: int = 0
     matched: int = 0
+    detail_used: int = 0                      # postings judged with a structured detail record
+    # Job.id → job_enrichment columns (structured half + resolution) for every *matched* job,
+    # so the caller can upsert them right after insert_job.
+    enrichment: dict[str, dict] = field(default_factory=dict)
 
 
-def postings_to_jobs(mnc: MNC, postings: list[RawPosting], log: Any = log) -> tuple[list[Job], FilterStats]:
+def postings_to_jobs(
+    mnc: MNC,
+    postings: list[RawPosting],
+    log: Any = log,
+    *,
+    details: Optional[dict[str, DetailRecord]] = None,
+) -> tuple[list[Job], FilterStats]:
+    """Title gate → location verdict (services.location_resolver.resolve, which prefers a
+    structured detail record over the listing string) → Job.
+
+    ``details`` maps posting URL → DetailRecord fetched by the caller for coarse/passing
+    listings; a fetcher may also have left one on ``RawPosting.detail``. Sync and pure:
+    all I/O happens before this is called.
+    """
+    platform = platform_for(mnc)
     stats = FilterStats(fetched=len(postings))
     jobs: list[Job] = []
     seen: set[str] = set()
-    platform = platform_for(mnc)
+    details = details or {}
     for p in postings:
         title = (p.title or "").strip()
         url = (p.url or "").strip()
@@ -51,30 +74,27 @@ def postings_to_jobs(mnc: MNC, postings: list[RawPosting], log: Any = log) -> tu
         seen.add(url)
         if not is_relevant_title(title):
             stats.title_rejected += 1
+            log.debug("mnc.filtered_title", company=mnc.name, title=title, reason=explain_title(title))
             continue
         location = (p.location or "").strip()
-        if not is_acceptable_location(location):
+        detail = details.get(url) or (p.detail if isinstance(p.detail, DetailRecord) else None)
+        if detail is not None and detail.status == "ok":
+            stats.detail_used += 1
+        res: Resolution = resolve(location, title=title, description=p.description or "", detail=detail)
+        if not res.location_ok:
             stats.location_rejected += 1
-            log.debug(
-                "mnc.filtered_location", company=mnc.name, title=title,
-                location=location, reason=explain_location(location),
-            )
+            log.debug("mnc.filtered_location", company=mnc.name, title=title, location=location, reason=res.reason)
             continue
-        jobs.append(
-            Job(
-                platform=platform,
-                title=title,
-                company=mnc.name,
-                location=location,
-                apply_link=url,
-                description=(p.description or "").strip() or f"Direct from {mnc.name} careers page",
-            )
+        job = Job(
+            platform=platform,
+            title=title,
+            company=mnc.name,
+            location=location,
+            apply_link=url,
+            description=(p.description or "").strip() or f"Direct from {mnc.name} careers page",
         )
+        jobs.append(job)
         stats.matched += 1
-    log.debug(
-        "mnc.filtered", company=mnc.name, fetched=stats.fetched, invalid=stats.invalid,
-        dupes=stats.dupes, title_rejected=stats.title_rejected,
-        location_rejected=stats.location_rejected, matched=stats.matched,
-        sample_title_reason=explain_title(postings[0].title) if postings else "",
-    )
+        row = {**(detail.to_row() if detail is not None else {}), **res.to_row()}
+        stats.enrichment[job.id] = row
     return jobs, stats

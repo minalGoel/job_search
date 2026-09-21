@@ -38,6 +38,9 @@ class RawPosting:
     posted_on: str = ""
     description: str = ""
     external_id: str = ""
+    # Structured detail a fetcher already has for this posting (a services.job_detail.DetailRecord),
+    # e.g. Workday's per-job CXS record — so the gate never fetches the same URL twice.
+    detail: Any = None
 
 
 @dataclass

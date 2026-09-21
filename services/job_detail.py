@@ -298,7 +298,7 @@ def parse_greenhouse_job(data: dict) -> Optional[DetailRecord]:
 _ORACLE_RE = re.compile(r"/hcmUI/CandidateExperience/([a-z]{2}(?:-[A-Za-z]{2})?)/sites/([A-Za-z0-9_]+)/job/(\d+)", re.I)
 _SR_RE = re.compile(r"jobs\.smartrecruiters\.com/([^/]+)/(\d+)")
 _GH_RE = re.compile(r"greenhouse\.io/([^/]+)/jobs/(\d+)")
-_WD_JOB_RE = re.compile(r"myworkdayjobs\.com/(?:[a-z]{2}-[A-Z]{2}/)?([^/]+)(/job/.+)$")
+_WD_JOB_RE = re.compile(r"myworkdayjobs\.com/(?:[a-z]{2}-[A-Z]{2}/)?([^/]+)(/job/.+?)(?:/apply|/)?(?:[?#].*)?$")  # listing URLs may end in /apply
 _NO_DETAIL_HOSTS = ("naukri.com", "hirist", "iimjobs.com", "foundit.in", "monsterindia", "indeed.com", "glassdoor")
 
 _HTML_HEADERS = {"Accept": "text/html,application/xhtml+xml,*/*;q=0.8", "Accept-Language": "en-US,en;q=0.9"}

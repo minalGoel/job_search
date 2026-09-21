@@ -90,6 +90,15 @@ async def _resolve_locations(
             p.location = "; ".join(locs)
             if not p.description:
                 p.description = re.sub(r"<[^>]+>", " ", info.get("jobDescription") or "")[:1500].strip()
+        try:
+            from services.job_detail import parse_workday_detail  # local import: keeps ats/ free of services at import time
+
+            rec = parse_workday_detail(data)
+            if rec is not None:
+                rec.url = url
+                p.detail = rec
+        except Exception as exc:  # noqa: BLE001 — detail is a bonus, never a failure
+            log.debug("workday.detail_parse_failed", url=url, error=str(exc))
 
     await asyncio.gather(*(_one(p) for p in postings))
 

@@ -45,6 +45,7 @@ class Settings(BaseSettings):
     MNC_HTML_MAX_PAGES: int = 10        # "Next"/"Load more" clicks per company
     MNC_HTTP_TIMEOUT: int = 25          # seconds per HTTP request
     MNC_COMPANY_TIMEOUT: int = 420      # hard wall clock per company (EY: ~120 SF pages at 2/host)
+    MNC_DETAIL_TIMEOUT: int = 120       # budget for the per-company structured-detail phase (never discards the listing)
 
     # Gmail OAuth (outreach sending)
     GMAIL_CREDENTIALS_PATH: str = "credentials/gmail_credentials.json"
