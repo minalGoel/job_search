@@ -149,23 +149,29 @@ def resolve(
         res.reason = f"role is outside India: {'; '.join(res.locations) or listing}{where}"
         return res
 
-    # 4) remote
+    # 4) nothing but the listing string → exactly today's filter (its remote exclusions,
+    #    "Remote - <US state>", country tails and city lists all apply)
+    if res.source == "listing":
+        res.location_ok = is_acceptable_location(listing)
+        why = explain(listing)
+        res.ncr_match = res.location_ok and "remote" not in why
+        res.reason = why + where
+        return res
+
+    # 5) remote (structured/LLM said so): open to India, and the listing carries no
+    #    regional restriction ("Remote - US only", "Remote (EMEA)")
     if res.work_mode == "remote":
-        if res.remote_scope in ("india", "global", "unknown"):
-            res.ncr_match = any(is_ncr_city(l) for l in res.locations)
+        restricted = explain(listing).startswith("regional restriction") if listing else False
+        if res.remote_scope in ("india", "global", "unknown") and not restricted:
+            res.ncr_match = any(is_ncr_city(l.split(",")[0]) for l in res.locations)
             res.location_ok = True
             res.reason = f"remote ({res.remote_scope}){where}"
         else:
             res.location_ok = False
-            res.reason = f"remote but restricted to another country{where}"
+            res.reason = f"remote but restricted to another region{where}"
         return res
 
-    # 5) hybrid / onsite / unknown: some named place must be NCR
-    if res.source == "listing":
-        res.location_ok = is_acceptable_location(listing)
-        res.ncr_match = res.location_ok and "remote" not in explain(listing)
-        res.reason = explain(listing) + where
-        return res
+    # 6) hybrid / onsite / unknown: some named place must be NCR
     ncr = [l for l in res.locations if is_ncr_city(l.split(",")[0])]
     res.ncr_match = bool(ncr)
     if ncr:
