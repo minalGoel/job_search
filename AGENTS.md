@@ -5,7 +5,7 @@
 > Every agent that writes code in this repo must first read the three protocol files in `docs/`:
 >
 > 1. **[`docs/known_edge_cases.md`](docs/known_edge_cases.md)** — data shapes, API quirks, and runtime scenarios that have broken naive implementations (with file + line references). Use this as a lookup when designing new scrapers, API endpoints, or scoring logic.
-> 2. **[`docs/guidelines_and_learnings.md`](docs/guidelines_and_learnings.md)** — 25 codified principles (single source of truth, defense in depth, `try/finally` + sentinel, `COALESCE` for partial updates, token-bucket rate limiters, etc.).
+> 2. **[`docs/guidelines_and_learnings.md`](docs/guidelines_and_learnings.md)** — 27 codified principles (single source of truth, defense in depth, `try/finally` + sentinel, `COALESCE` for partial updates, token-bucket rate limiters, etc.).
 > 3. **[`docs/protocol_to_identify_issues.md`](docs/protocol_to_identify_issues.md)** — seven-phase audit protocol used when auditing a class of bugs. Follow this when the user says "check for bugs" or "audit X" — do NOT start editing files before completing Phase 0–2.
 >
 > After shipping a fix, update `known_edge_cases.md` with the new case and promote patterns into `guidelines_and_learnings.md` when seen more than once.
@@ -14,7 +14,7 @@
 
 ## Project Context
 
-This is a Python async CLI tool for aggregating PM job listings across 14 active job-board scrapers (11 boards + 3 API aggregators; Wellfound/Glassdoor disabled), VC portals, ~350 MNC careers portals, funding trackers, and automated email outreach. **All title/location filtering is ours** (`services/title_filter.py`, `services/location_filter.py`) — portal search params are volume hints only. Title gate = anything with "product" (categories sort PM vs leadership vs owner vs marketing); location = mentions NCR (any spelling) or remote, remote/hybrid preferred in scoring. The user is a Senior PM candidate targeting Delhi NCR, 5-7 yrs exp, 50+ LPA, Tech/SaaS/B2B.
+This is a Python async CLI tool for aggregating PM job listings across 14 active job-board scrapers (11 boards + 3 API aggregators; Wellfound/Glassdoor disabled), VC portals, ~350 MNC careers portals, funding trackers, and automated email outreach. **All title/location filtering is ours** (`services/title_filter.py`, `services/location_filter.py`) — portal search params are volume hints only. **Location verdicts come from `services/location_resolver.py`** (`passes()`): the job's structured detail record (Oracle/Workday API, JSON-LD, microdata — `services/job_detail.py`) beats the local-LLM extraction (`services/llm_extractor.py`, Ollama `qwen2.5:3b`) beats the listing string; results live in `job_enrichment` (`python main.py enrich`). Rejected rows are hidden, never deleted. Title gate = anything with "product" (categories sort PM vs leadership vs owner vs marketing); location = mentions NCR (any spelling) or remote, remote/hybrid preferred in scoring. The user is a Senior PM candidate targeting Delhi NCR, 5-7 yrs exp, 50+ LPA, Tech/SaaS/B2B.
 
 ## Agent Roles
 
@@ -28,6 +28,7 @@ This is a Python async CLI tool for aggregating PM job listings across 14 active
 - `config/search_params.py` — SearchParams dataclass with titles, location, experience, CTC
 - `services/cookie_manager.py` — LOGIN_URLS dict (add here if login-gated)
 - `services/preflight.py` — decides whether a scraper can run (cookies / API keys); skips are `"skipped: …"` notes, not errors
+- `services/job_detail.py` / `services/llm_extractor.py` / `services/location_resolver.py` / `services/enrichment.py` — structured detail fetch, Ollama extraction (verified), the one location predicate, and the enrichment pass (`enrich` CLI; runs after every scrape for the inserted ids)
 - `scrapers/api_base.py` — `APIScraper` base + `stable_link`/`stable_job_id`/`strip_html`/`parse_iso_date`/`parse_epoch` for httpx-only scrapers
 
 **Patterns to follow**:
@@ -76,6 +77,8 @@ This is a Python async CLI tool for aggregating PM job listings across 14 active
 **How it works**: `mnc_careers/scraper.py` runs two lanes — API (httpx, typed fetchers in `mnc_careers/ats/`: workday, greenhouse, lever, smartrecruiters, successfactors (classic + Unify), phenom, radancy, oracle_hcm, avature, amazon_jobs) and HTML (Playwright, `mnc_careers/html_generic.py` with JSON interception + card selectors + pagination + consent-banner dismissal). Every fetcher pulls the **full listing** (cap `MNC_MAX_POSTINGS`; keyword "net" only on cap-hit) and `mnc_careers/filter.py` applies the shared title/location filters. Per-company outcomes go to `source_runs`.
 
 **Commands**: `mnc-jobs [--only A,B] [--ats workday] [--dry-run] [--cap N]`; `mnc-discover [--dry-run] [--browser] [--only …]` (probe + verify → `output/mnc_discovery_entries.py` paste-ready literals); `mnc-discover --repair [--ats workday] [--apply] [--apply-fallbacks]` (re-verify existing entries, sweep Workday host×site variants, patch `registry.py`).
+
+**Gate**: `scraper._run_one` fetches the structured detail record (under `MNC_DETAIL_TIMEOUT`, never discarding the listing) for title-passing postings whose listing location is coarse or already passes; `postings_to_jobs(details=)` resolves each posting and hands `FilterStats.enrichment` rows to `_run_mnc_jobs` for upsert (new and existing ids).
 
 **Rules**: `platform_for()` is the Job.platform formula — never change it (Job.id depends on it). `api_type=""` means auto-detect; `"html"` forces the browser lane. Detected `eightfold` sites run in the HTML lane (API returns 403 to non-browsers). `phenom`, `radancy` and `avature` are detected from the URL shape only — when the first page doesn't behave like that ATS the fetcher raises `NotThisATS` and the company is rerouted to the HTML lane in the same run. Acquired companies whose tenant is retired (Juniper → HPE, Ansys → Synopsys) stay in the registry with `pm_search_url=""` and an `ABSORBED` note — not a target, still resolvable. Never add a company by hand-typing a URL — run `mnc-discover` so it is verified by the real fetcher. Fuzzy name matches are advisory; `CSV_ALIASES` is the alias truth.
 
@@ -217,7 +220,8 @@ This is a Python async CLI tool for aggregating PM job listings across 14 active
 
 ## Testing Approach
 
-- **Unit tests**: `.venv/bin/python -m unittest discover -s tests -t .` (title filter, preflight, api_base, aggregator parsers, ATS detect/fetchers, MNC filter/registry, DB migrations)
+- **Unit tests**: `.venv/bin/python -m unittest discover -s tests -t .` (title filter, preflight, api_base, aggregator parsers, ATS detect/fetchers, MNC filter/registry, DB migrations, job_detail parsers, location resolver, enrichment/API visibility)
+- **Enrichment test**: `python main.py enrich --platform mnc_nokia --no-llm` (Oracle detail → "Bangalore, Karnataka, IN", hidden); `python main.py enrich --limit 10` exercises Ollama (skips cleanly when it is down)
 - **Smoke test**: `python main.py run -p remoteok` (API-based, no browser launched, fastest feedback)
 - **Skip path**: `python main.py run -p cutshort` → `SKIPPED — no cookies`, exit 0 in < 5 s
 - **MNC test**: `python main.py mnc-jobs --only "SAP,Autodesk,Razorpay" --dry-run` (per-company table, nothing written)

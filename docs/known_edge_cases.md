@@ -293,3 +293,25 @@ as saved. Every status the API can write needs a column (Skipped is collapsed be
 — the fallback is only for corrupt data. Kanban cards were drag-only with no detail view; they now
 open a modal fed by `GET /api/jobs/{id}` (decorated with `title_category`/`work_mode` like the list).
 Regression tests: `tests/test_api_server.py`. Found by `/qa`, 2026-09-21.
+
+## 36. Listing location ≠ job location: fetch the structured detail, then let the resolver decide (Sept 2026)
+
+Nokia's Oracle listing says `PrimaryLocation: "India"`, `WorkplaceType: "Hybrid"`; the job page's detail record says *Manyata Embassy Business Park, Bangalore*. Our gate, `work_mode()` and the hybrid bonus all ran on the listing string, so "hybrid in Bangalore" scored as an NCR-friendly hybrid role. The same class produced ABB *Nashik*, BNY *"MH, India"*, GE *Casablanca + Remote Tunisia*, SGS *Bogotá, co (Remote)*, HSBC *Taguig, NCR, Philippines* in the matched set.
+
+**Where the truth lives (verified per ATS):**
+
+| Source | Structured record | Notes |
+|---|---|---|
+| Oracle HCM | `recruitingCEJobRequisitionDetails?expand=all&onlyData=true&finder=ById;Id="{id}",siteNumber={site}` → `workLocation[] {TownOrCity, Region2, PostalCode, Country}`, `WorkplaceType`, `ExternalDescriptionStr` | The `Id` must be quoted; `ByJobRequisitionId` is not a valid finder. |
+| Workday | CXS `/wday/cxs/{tenant}/{site}{externalPath}` → `jobPostingInfo.location`, `additionalLocations`, `remoteType`, `jobDescription` | Listing URLs may end in `/apply` — strip it. The fetcher keeps the parsed record on `RawPosting.detail` so the gate never fetches twice. |
+| SmartRecruiters | `api.smartrecruiters.com/v1/companies/{co}/postings/{id}` → `location{city,region,country,remote}` | Listing already has the city; detail adds `remote` and the ad text. |
+| Greenhouse | `boards-api.greenhouse.io/v1/boards/{board}/jobs/{id}` → `location.name`, `offices[]`, `content` | `?gh_jid=` on a custom domain has no board → page JSON-LD. |
+| Workday / Phenom / Radancy / Avature / LinkedIn pages | schema.org **JobPosting JSON-LD** (`jobLocation[].address.{addressLocality, addressRegion, addressCountry, postalCode}`, `jobLocationType: TELECOMMUTE`, `description`, `datePosted`) | `addressLocality` is often an office code (`IND-Gurgaon (SVG)`, `NOIDA 05`) — `_split_locality` pulls the city out. `TELECOMMUTE` alone means "remote allowed", not remote: treated as hybrid unless the text says remote. |
+| SuccessFactors classic, SmartRecruiters pages | schema.org **microdata** (`itemprop="jobLocation"` → `address` → `addressLocality`…) | No JSON-LD on these. |
+| Naukri / Hirist / IIMJobs / Foundit / Indeed | none (SPA or Cloudflare) | LLM on the stored description only. |
+
+**Rules that fell out of it** (`services/location_resolver.py`): structured city-level locations beat the LLM, which beats the listing; a listing-only verdict is exactly `is_acceptable_location` (so nothing regresses for un-enriched rows); any resolved country other than India rejects unless the role is remote-India; remote passes only without a regional restriction in the listing; hybrid/onsite need an NCR city among the resolved places. **The gate fetches detail only for coarse-or-passing listings** — a listing that says "Bengaluru" is trusted; 4,273 title-passing postings per run would otherwise mean 4,273 requests.
+
+**LLM (Ollama, qwen2.5:3b, JSON schema output)**: 3B models file countries under `cities` ("Finland", "Germany") and quote boilerplate ("offices in 40 countries") — the verifier drops any city not in the text, any city that is a country name, and a *single* city whose evidence sentence doesn't name it. `num_ctx` must stay constant across calls or Ollama reloads the model. ~2–5 s per job on a 16 GB M-series.
+
+**Manila's NCR**: `Muntinlupa, NCR, ph` passed the listing filter via the "ncr" token. A string that *ends* in a non-India country (last comma/dash segment) is rejected before the NCR check unless "India" appears anywhere (`_tail_country`).

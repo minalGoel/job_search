@@ -325,3 +325,11 @@ When an integration is picked from a URL shape (`/search-jobs` → Radancy, `/Se
 ## 25. When a textual patcher edits a record, anchor on the field, not the value
 
 `apply_repairs` rewrote registry entries by replacing the first occurrence of the old URL string. Discovered entries carry the same URL in `careers_url` and `pm_search_url`, so the marketing link was fixed and the dead listing URL survived (Mace, MSC) — silently, because the patch count still said "applied". Anchor textual edits on `field=value` and fall back to value-only matching solely for positional records; then assert the *intended* field changed (`mnc-jobs --only X --dry-run` after `--apply`).
+
+## 26. Structured beats text; the LLM proposes, code verifies
+
+When a source gives you both a coarse field and a structured record, the record wins and the field is only a hint (§12 said this about portal search; it is equally true of *listing* locations vs the job page). Reach for an LLM only for the residue the structured layer cannot answer, and treat its output as a proposal: every entity it returns must be provably in the input (substring after normalisation), quoted evidence must be a real substring, and anything unbacked is dropped with a reason you can read later (`en_llm_json.dropped`). Keep the schema flat and small, temperature 0, grammar-constrained output; log per-call latency. This makes a 3B local model safe to run over hundreds of postings unattended.
+
+## 27. One predicate per decision
+
+A verdict that several layers compute independently (`main.py` gate, `filter.py`, `/api/jobs`, `/api/mnc-jobs`, scoring) will disagree the moment one of them learns something new — the MNC run accepted Gurgaon-via-job-page jobs that the pipeline gate then rejected by listing string. Put the decision in one function (`location_resolver.passes`) and make every consumer call it, with the stored verdict as the first input and the old heuristic as the fallback.
