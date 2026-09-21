@@ -776,6 +776,18 @@ body::after {
       <option value="onsite">On-site</option>
       <option value="unknown">Unknown</option>
     </select>
+    <select id="job-tracked" class="select" onchange="loadJobs()" title="Applied / interviewing / rejected / skipped roles are end-of-cycle: the Tracker owns them">
+      <option value="active">Active (hide applied &amp; skipped)</option>
+      <option value="all">Everything</option>
+      <option value="untracked">Untracked only</option>
+      <option value="saved">Saved only</option>
+      <option value="applied">Applied &amp; beyond</option>
+      <option value="skipped">Skipped only</option>
+    </select>
+    <select id="job-locmode" class="select" onchange="loadJobs()" title="The location check uses the job page / AI-resolved location when we have it">
+      <option value="strict">NCR / remote only</option>
+      <option value="all">Show location-rejected too</option>
+    </select>
     <select id="job-sort" class="select" onchange="loadJobs()">
       <option value="relevance">Sort: Relevance</option>
       <option value="date">Sort: Date</option>
@@ -806,6 +818,7 @@ body::after {
       <p id="tracker-subtitle">Loading applications...</p>
     </div>
     <div style="display:flex;gap:8px">
+      <input id="tracker-search" type="text" class="input" placeholder="Search title, company…" style="width:200px" oninput="clearTimeout(window._trST);window._trST=setTimeout(renderTrackerBoard,150)" />
       <button id="tracker-skipped-toggle" class="btn-ghost btn-sm" onclick="toggleSkippedColumn()" title="Roles you skipped stay here so they never resurface as new">Skipped (0) ▸</button>
       <button class="btn-ghost btn-sm" onclick="loadTracker()">↺ Refresh</button>
     </div>
@@ -1570,13 +1583,18 @@ async function loadJobs(page) {
   const sort = document.getElementById('job-sort')?.value || 'relevance';
   const category = document.getElementById('job-category')?.value || '';
   const workMode = document.getElementById('job-workmode')?.value || '';
-  const url = `/api/jobs?page=${page}&limit=50&search=${encodeURIComponent(search)}&platform=${platform}&bucket=${bucket}&sort=${sort}&title_category=${category}&work_mode=${workMode}`;
+  const tracked = document.getElementById('job-tracked')?.value || 'active';
+  const locMode = document.getElementById('job-locmode')?.value || 'strict';
+  const url = `/api/jobs?page=${page}&limit=50&search=${encodeURIComponent(search)}&platform=${platform}&bucket=${bucket}&sort=${sort}&title_category=${category}&work_mode=${workMode}&tracked=${tracked}&location_mode=${locMode}`;
   document.getElementById('jobs-tbody').innerHTML = '<tr><td colspan="8" style="text-align:center;padding:30px;color:var(--t3)">Loading...</td></tr>';
   try {
     const data = await GET(url);
     STATE.jobs = { ...STATE.jobs, ...data };
     renderJobsTable(data.jobs);
-    document.getElementById('job-count').textContent = `${data.total.toLocaleString()} jobs`;
+    const hiddenBits = [];
+    if (data.hidden_count) hiddenBits.push(`${data.hidden_count} hidden by location check`);
+    if (data.hidden_by_status) hiddenBits.push(`${data.hidden_by_status} applied/skipped`);
+    document.getElementById('job-count').textContent = `${data.total.toLocaleString()} jobs` + (hiddenBits.length ? ` · ${hiddenBits.join(' · ')}` : '');
     renderJobsPagination(data);
   } catch(e) {
     document.getElementById('jobs-tbody').innerHTML = `<tr><td colspan="8" style="text-align:center;padding:30px;color:var(--red)">Error: ${e.message}</td></tr>`;
@@ -1608,14 +1626,15 @@ function renderJobsTable(jobs) {
     const modeCol = j.work_mode==='remote' ? DS.grn : j.work_mode==='hybrid' ? DS.blu : DS.neu;
     const catChip = catLabel ? `<span style="font-size:9px;padding:1px 6px;border-radius:4px;background:${catCol}15;color:${catCol};border:1px solid ${catCol}40;font-family:'JetBrains Mono',monospace;font-weight:700">${catLabel}</span>` : '';
     const modeChip = (j.work_mode && j.work_mode!=='unknown') ? `<span style="font-size:9px;padding:1px 6px;border-radius:4px;background:${modeCol}15;color:${modeCol};border:1px solid ${modeCol}40;font-family:'JetBrains Mono',monospace">${j.work_mode}</span>` : '';
-    return `<tr class="${rowCls}" data-id="${j.id}" data-bucket="${j.priority_bucket||''}" data-apply-link="${(j.apply_link||'').replace(/"/g,'&quot;')}">
+    const dim = j.location_ok === false ? 'opacity:.55' : '';
+    return `<tr class="${rowCls}" data-id="${j.id}" data-bucket="${j.priority_bucket||''}" data-apply-link="${(j.apply_link||'').replace(/"/g,'&quot;')}" style="${dim}">
       <td>
-        <div style="font-size:13px;font-weight:500;color:var(--t1)">${j.title}</div>
-        <div style="font-size:11px;color:var(--t3);margin-top:2px">${j.company}</div>
+        <div style="font-size:13px;font-weight:500;color:var(--t1);cursor:pointer" onclick="showJobDetail('${j.id}')" title="Details">${CO_ESC(j.title)}</div>
+        <div style="font-size:11px;color:var(--t3);margin-top:2px">${CO_ESC(j.company)}</div>
         <div style="margin-top:4px;display:flex;gap:3px;flex-wrap:wrap;align-items:center">${catChip}${modeChip}${skills}</div>
       </td>
       <td>${pltBadge(j.platform)}</td>
-      <td style="font-size:12px;color:var(--t2)">${j.location||'—'}</td>
+      <td style="font-size:12px;color:var(--t2)">${locationCell(j)}</td>
       <td style="font-size:12px;font-family:'JetBrains Mono',monospace;color:${j.salary?DS.grn:DS.t3}">${j.salary||'—'}</td>
       <td>${scoreBar(j.priority_score)}</td>
       <td style="font-size:11px;color:var(--t3);font-family:'JetBrains Mono',monospace">${relTime(j.scraped_at)}</td>
@@ -1623,6 +1642,18 @@ function renderJobsTable(jobs) {
       <td>${actionBtns}</td>
     </tr>`;
   }).join('');
+}
+
+// Resolved location (job page / AI) beats the listing string; the glyph says which one you're seeing.
+function locationCell(j) {
+  const src = j.location_source || 'listing';
+  const glyph = src === 'structured' ? '📄' : src === 'llm' ? '✨' : '🏷';
+  const label = src === 'structured' ? 'from the job page' : src === 'llm' ? 'extracted by the local AI' : 'as listed';
+  const shown = j.location_display || j.location || '—';
+  const differs = j.location_display && j.location && j.location_display !== j.location;
+  const tip = `${label}${j.location_reason ? ' · ' + j.location_reason : ''}${differs ? ' · listing said: ' + j.location : ''}`;
+  const bad = j.location_ok === false ? `<div style="font-size:10px;color:${DS.red};margin-top:2px">${CO_ESC(j.location_reason || 'outside NCR / not remote')}</div>` : '';
+  return `<span title="${CO_ESC(tip)}">${CO_ESC(shown)} <span style="font-size:10px;opacity:.7">${glyph}</span></span>${bad}`;
 }
 
 function renderJobsPagination(data) {
@@ -1703,6 +1734,17 @@ async function loadTracker() {
   board.innerHTML = '<div style="color:var(--t3);font-size:13px;padding:40px">Loading...</div>';
   try {
     const apps = await GET('/api/applications');
+    STATE.trackerAll = apps;
+    renderTrackerBoard();
+  } catch(e) { board.innerHTML = `<div style="padding:40px;color:var(--red)">Error: ${e.message}</div>`; }
+}
+
+function renderTrackerBoard() {
+  const board = document.getElementById('kanban-board');
+  const q = (document.getElementById('tracker-search')?.value || '').trim().toLowerCase();
+  let apps = STATE.trackerAll || [];
+  if (q) apps = apps.filter(a => [a.title, a.company, a.job?.title, a.job?.company, a.job?.location, a.notes].filter(Boolean).join(' ').toLowerCase().includes(q));
+  try {
     const byStatus = {};
     COLUMNS.forEach(c => { byStatus[c.status] = []; });
     apps.forEach(a => { (byStatus[a.status] ? byStatus[a.status] : byStatus['shortlisted']).push(a); });
@@ -1757,7 +1799,7 @@ function renderKanbanCard(app, colColor) {
   </div>`;
 }
 
-function toggleSkippedColumn() { STATE.skippedOpen = !STATE.skippedOpen; loadTracker(); }
+function toggleSkippedColumn() { STATE.skippedOpen = !STATE.skippedOpen; renderTrackerBoard(); }
 
 // ── Job detail modal (kanban cards → details, posting link, stage change) ──
 async function showJobDetail(jobId, appId) {
@@ -1777,22 +1819,45 @@ async function showJobDetail(jobId, appId) {
     const status = (j.application && j.application.status) || (app && app.status) || '';
     title.textContent = j.title || app?.title || 'Job';
     const reasons = (() => { try { return JSON.parse(j.score_reasons || '[]'); } catch(e) { return []; } })();
-    const meta = [j.company, j.location, j.work_mode ? j.work_mode : '', j.title_category ? j.title_category.replace(/_/g,' ') : '', j.salary_range, j.posted_date ? 'posted ' + fmtDate(j.posted_date) : '', j.experience_required]
+    const en = j.enrichment || null;
+    const meta = [j.company, j.location_display || j.location, j.work_mode && j.work_mode !== 'unknown' ? j.work_mode : '', j.title_category ? j.title_category.replace(/_/g,' ') : '', j.salary, (en && en.posted_date) || j.posted_date ? 'posted ' + fmtDate((en && en.posted_date) || j.posted_date) : '']
       .filter(Boolean).map(esc).join(' · ');
-    const stageOptions = COLUMNS.map(c => `<option value="${c.status}" ${c.status===status?'selected':''}>${c.label.replace(' 🎉','')}</option>`).join('');
+    const srcLabel = { structured: 'from the job page', llm: 'extracted by the local AI', listing: 'as listed' }[j.location_source || 'listing'];
+    const okCol = j.location_ok === false ? DS.red : DS.grn;
+    const locRows = (en && en.locations && en.locations.length)
+      ? en.locations.map(l => `<div style="font-size:12px;color:var(--t1)">${esc([l.city, l.region, l.postal, l.country].filter(Boolean).join(', ') || l.raw)}${l.raw && l.raw !== [l.city, l.region, l.postal, l.country].filter(Boolean).join(', ') ? `<div style="font-size:10px;color:var(--t3)">${esc(l.raw)}</div>` : ''}</div>`).join('')
+      : `<div style="font-size:12px;color:var(--t2)">${esc(j.location || '—')} <span style="font-size:10px;color:var(--t3)">(listing)</span></div>`;
+    const llm = en && en.llm ? en.llm : null;
+    const locationSection = `
+      <div style="border:1px solid var(--br);border-radius:10px;padding:12px 14px;margin-bottom:14px;background:var(--card2)">
+        <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:6px">
+          <div class="sec-label" style="margin:0">Location · ${esc(srcLabel)}</div>
+          <span class="chip" style="font-size:10px;background:${okCol}15;color:${okCol};border:1px solid ${okCol}40">${j.location_ok === false ? 'outside scope' : 'in scope'}</span>
+        </div>
+        ${locRows}
+        <div style="font-size:11px;color:var(--t2);margin-top:6px">${esc(j.location_reason || '')}${en && en.workplace_type ? ` · portal says <b>${esc(en.workplace_type.replace('_', ' / '))}</b>` : ''}${en && en.detail_source ? ` · source: ${esc(en.detail_source)}` : ''}</div>
+        ${llm && (llm.evidence_location || llm.evidence_work_mode) ? `<div style="font-size:11px;color:var(--t3);margin-top:6px;font-style:italic">AI evidence: ${esc(llm.evidence_location || '')}${llm.evidence_location && llm.evidence_work_mode ? ' — ' : ''}${esc(llm.evidence_work_mode || '')}</div>` : ''}
+      </div>`;
+    const roleBits = en ? [en.seniority && en.seniority !== 'unknown' ? 'seniority: ' + en.seniority : '', en.role_type && en.role_type !== 'other' ? 'role: ' + en.role_type.replace(/_/g, ' ') : '',
+      en.years_min != null ? `experience: ${en.years_min}${en.years_max != null ? '–' + en.years_max : '+'} yrs` : '', en.employment_type ? en.employment_type : ''].filter(Boolean) : [];
+    const roleSection = roleBits.length ? `<div style="font-size:11px;color:var(--t2);margin-bottom:12px">About the role (AI/job page): ${roleBits.map(esc).join(' · ')}</div>` : '';
+    const fullDesc = (en && en.description_full) || j.description || '';
+    const stageOptions = (status ? '' : '<option value="" selected disabled>— not tracked —</option>') + COLUMNS.map(c => `<option value="${c.status}" ${c.status===status?'selected':''}>${c.label.replace(' 🎉','')}</option>`).join('');
     body.innerHTML = `
       <div style="font-size:13px;color:var(--t2);margin-bottom:10px">${meta}</div>
+      ${locationSection}${roleSection}
       <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:14px">
         ${pltBadge(j.platform||'—')} ${j.priority_score != null ? scoreBar(j.priority_score) : ''} ${j.priority_bucket ? bucketChip(j.priority_bucket) : ''}
         ${status ? `<span class="chip chip-${status}" style="font-size:10px">${STATUS_LABEL[status]||status}</span>` : ''}
       </div>
       ${reasons.length ? `<div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:14px">${reasons.map(r=>`<span class="chip" style="font-size:10px;background:var(--accg);color:var(--acc);border:1px solid var(--br)">${esc(r).replace(/_/g,' ')}</span>`).join('')}</div>` : ''}
-      ${j.description ? `<div style="font-size:12px;color:var(--t2);line-height:1.55;max-height:220px;overflow-y:auto;padding:12px;background:var(--card2);border:1px solid var(--br);border-radius:8px;margin-bottom:16px;white-space:pre-wrap">${esc(j.description.slice(0,2500))}${j.description.length>2500?'…':''}</div>` : ''}
+      ${fullDesc ? `<div style="font-size:12px;color:var(--t2);line-height:1.55;max-height:260px;overflow-y:auto;padding:12px;background:var(--card2);border:1px solid var(--br);border-radius:8px;margin-bottom:16px;white-space:pre-wrap">${esc(fullDesc.slice(0,6000))}${fullDesc.length>6000?'…':''}</div>` : ''}
       <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
         ${j.apply_link ? `<a class="btn-primary btn-sm" href="${esc(j.apply_link)}" target="_blank" rel="noopener" style="text-decoration:none">Open job posting ↗</a>` : '<span style="font-size:11px;color:var(--t3)">No link stored for this job</span>'}
         ${j.id ? `<label style="font-size:11px;color:var(--t3);display:flex;align-items:center;gap:6px">Stage
           <select class="select" onchange="moveJobFromModal('${esc(j.id)}', this.value)">${stageOptions}</select></label>` : ''}
         ${status === 'skipped' && j.id ? `<button class="btn-ghost btn-sm" onclick="moveJobFromModal('${esc(j.id)}','shortlisted')">Restore to Saved</button>` : ''}
+        ${!status && j.id ? `<button class="btn-ghost btn-sm" onclick="moveJobFromModal('${esc(j.id)}','shortlisted')">Save</button><button class="btn-ghost btn-sm" style="color:var(--red);border-color:var(--redg)" onclick="moveJobFromModal('${esc(j.id)}','skipped')">Skip</button>` : ''}
         ${status && j.id ? `<button class="btn-ghost btn-sm" style="color:var(--red);border-color:var(--redg);margin-left:auto" onclick="untrackJobFromModal('${esc(j.id)}')">Untrack</button>` : ''}
       </div>`;
   } catch(e) { title.textContent = 'Error'; body.innerHTML = `<div style="color:var(--red);font-size:12px">${esc(e.message)}</div>`; }
@@ -1804,6 +1869,7 @@ async function moveJobFromModal(jobId, status) {
     toast(`Moved to ${STATUS_LABEL[status]||status}`, 'success');
     document.getElementById('job-modal').style.display = 'none';
     if (STATE.currentScreen === 'tracker') loadTracker();
+    if (STATE.currentScreen === 'jobs') loadJobs(STATE.jobs.page || 1);
   } catch(e) { toast('Error: ' + e.message, 'error'); }
 }
 
@@ -2002,7 +2068,7 @@ async function loadVC() {
       jobsEl.innerHTML = `<div class="empty"><div class="icon">🏦</div><div class="title">No VC jobs yet</div><div class="sub">Click "Scrape VC Jobs" to fetch</div></div>`;
     } else {
       jobsEl.innerHTML = `<table class="data-table"><thead><tr><th>Role</th><th>Company</th><th>Platform</th><th>Score</th><th>Action</th></tr></thead>
-        <tbody>${jobs.jobs.map(j=>`<tr class="row-hover"><td><div style="font-size:12px;font-weight:500;color:var(--t1)">${j.title}</div></td><td style="font-size:12px;color:var(--t2)">${j.company}</td><td>${pltBadge(j.platform)}</td><td>${scoreBar(j.priority_score)}</td><td><button class="btn-primary btn-sm" onclick="applyJob('${j.id}',this)">Apply</button></td></tr>`).join('')}</tbody></table>`;
+        <tbody>${jobs.jobs.map(j=>`<tr class="row-hover"><td><div style="font-size:12px;font-weight:500;color:var(--t1);cursor:pointer" onclick="showJobDetail('${j.id}')" title="Details">${CO_ESC(j.title)}</div><div style="font-size:10px;color:var(--t3)">${locationCell(j)}</div></td><td style="font-size:12px;color:var(--t2)">${CO_ESC(j.company)}</td><td>${pltBadge(j.platform)}</td><td>${scoreBar(j.priority_score)}</td><td><button class="btn-primary btn-sm" onclick="applyJob('${j.id}',this)">Apply</button></td></tr>`).join('')}</tbody></table>`;
     }
   } catch(e) { document.getElementById('vc-registry').innerHTML=`<div style="padding:16px;color:var(--red);font-size:12px">Error: ${e.message}</div>`; }
 }
@@ -2038,7 +2104,7 @@ async function loadMNC() {
       jobsEl.innerHTML = `<div class="empty"><div class="icon">🏢</div><div class="title">No MNC jobs yet</div><div class="sub">Click "Scrape MNC Jobs" to fetch</div></div>`;
     } else {
       jobsEl.innerHTML = `<table class="data-table"><thead><tr><th>Role</th><th>Company</th><th>Location</th><th>Score</th><th>Action</th></tr></thead>
-        <tbody>${jobs.jobs.map(j=>`<tr class="row-hover"><td><div style="font-size:12px;font-weight:500;color:var(--t1)"><a href="${j.apply_link}" target="_blank" rel="noopener" style="color:inherit;text-decoration:none">${j.title}</a></div></td><td style="font-size:12px;color:var(--t2)">${j.company}</td><td style="font-size:11px;color:var(--t3)">${j.location||''}</td><td>${scoreBar(j.priority_score)}</td><td><button class="btn-primary btn-sm" onclick="applyJob('${j.id}',this)">Apply</button></td></tr>`).join('')}</tbody></table>`;
+        <tbody>${jobs.jobs.map(j=>`<tr class="row-hover"><td><div style="font-size:12px;font-weight:500;color:var(--t1);cursor:pointer" onclick="showJobDetail('${j.id}')" title="Details">${CO_ESC(j.title)}</div></td><td style="font-size:12px;color:var(--t2)">${CO_ESC(j.company)}</td><td style="font-size:11px;color:var(--t3)">${locationCell(j)}</td><td>${scoreBar(j.priority_score)}</td><td><button class="btn-primary btn-sm" onclick="applyJob('${j.id}',this)">Apply</button></td></tr>`).join('')}</tbody></table>`;
     }
   } catch(e) { document.getElementById('mnc-registry').innerHTML=`<div style="padding:16px;color:var(--red);font-size:12px">Error: ${e.message}</div>`; }
 }
