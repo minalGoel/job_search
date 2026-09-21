@@ -476,13 +476,14 @@ class JobDB:
         a legitimately poor-signal job can score 0 and should not be rescored
         on every call.
         """
+        # Explicit en_* columns (never SELECT e.*) so nothing shadows a jobs column.
+        select = """SELECT j.*, e.en_resolved_work_mode, e.en_ncr_match, e.en_location_ok, e.en_resolved_locations
+                    FROM jobs j LEFT JOIN job_enrichment e ON e.job_id = j.id"""
         if rescore_all:
-            rows = self.conn.execute(
-                "SELECT * FROM jobs WHERE is_duplicate = 0 ORDER BY scraped_at DESC"
-            ).fetchall()
+            rows = self.conn.execute(f"{select} WHERE j.is_duplicate = 0 ORDER BY j.scraped_at DESC").fetchall()
         else:
             rows = self.conn.execute(
-                "SELECT * FROM jobs WHERE is_duplicate = 0 AND priority_bucket = '' ORDER BY scraped_at DESC"
+                f"{select} WHERE j.is_duplicate = 0 AND j.priority_bucket = '' ORDER BY j.scraped_at DESC"
             ).fetchall()
         return [self._row_to_dict(r) for r in rows]
 

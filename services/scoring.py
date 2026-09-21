@@ -163,8 +163,15 @@ def score_job(job: dict, company_profile: Optional[dict] = None) -> dict:
     if neg_matched:
         flags.append(f"negative_keywords:{','.join(neg_matched[:2])}")
 
-    # Location
-    loc_match = any(allowed in location for allowed in LOCATION_ALLOWLIST)
+    # Location — the enrichment verdict (job page / LLM) when the job has one, else the
+    # listing string against the allowlist. en_* keys come from JobDB.get_jobs_for_scoring's
+    # LEFT JOIN on job_enrichment.
+    ncr_match = job.get("en_ncr_match")
+    resolved_mode = (job.get("en_resolved_work_mode") or "").lower()
+    if ncr_match is not None:
+        loc_match = bool(ncr_match) or (resolved_mode == "remote" and bool(job.get("en_location_ok")))
+    else:
+        loc_match = any(allowed in location for allowed in LOCATION_ALLOWLIST)
     if loc_match:
         relevance += LOCATION_MATCH_SCORE
         reasons.append("location_match")
@@ -172,9 +179,14 @@ def score_job(job: dict, company_profile: Optional[dict] = None) -> dict:
         relevance += LOCATION_MISMATCH_SCORE
         flags.append("non_target_location")
 
-    # Work mode — the user prefers remote/hybrid roles (config/scoring_rules.WORK_MODE_BONUS)
-    mode = _work_mode(job.get("location", ""), job.get("title", ""), job.get("description", ""))
-    mode_bonus = WORK_MODE_BONUS.get(mode, 0)
+    # Work mode — the user prefers remote/hybrid roles (config/scoring_rules.WORK_MODE_BONUS).
+    # A resolved mode wins over the text heuristic; "hybrid in Bangalore" earns nothing.
+    mode = resolved_mode if resolved_mode in ("remote", "hybrid", "onsite") else \
+        _work_mode(job.get("location", ""), job.get("title", ""), job.get("description", ""))
+    if ncr_match is not None and not job.get("en_location_ok"):
+        mode_bonus = 0
+    else:
+        mode_bonus = WORK_MODE_BONUS.get(mode, 0)
     if mode_bonus:
         relevance += mode_bonus
         reasons.append(f"{mode}_role")

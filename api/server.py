@@ -39,6 +39,7 @@ from storage.db import (
 )
 from outreach.db import OutreachDB
 from services.location_filter import is_acceptable_location
+from services.location_resolver import passes as _passes
 from services.preflight import skip_reason, split_run_notes
 from services.location_filter import work_mode as _job_work_mode
 from services.title_filter import categorize as _categorize_title
@@ -61,11 +62,72 @@ MAIN_PY = str(ROOT / "main.py")
 
 # ── DB helpers ────────────────────────────────────────────────────────────────
 
-def _decorate_job(job: dict) -> dict:
-    """Attach derived, filterable fields (single source of truth: services.*_filter)."""
+END_OF_CYCLE_STATUSES = {"applied", "screening", "interview", "offer", "rejected", "skipped"}
+
+
+def _decorate_job(job: dict, enrichment: Optional[dict] = None) -> dict:
+    """Attach derived, filterable fields. Single source of truth: services.*_filter for the
+    heuristics, services.location_resolver for the verdict. When the job has an enrichment
+    row, the *resolved* location/work mode win over the listing string."""
     job["title_category"] = _categorize_title(job.get("title", ""))
-    job["work_mode"] = _job_work_mode(job.get("location", ""), job.get("title", ""), job.get("description", ""))
+    heuristic_mode = _job_work_mode(job.get("location", ""), job.get("title", ""), job.get("description", ""))
+    en = enrichment or {}
+    resolved_mode = en.get("en_resolved_work_mode") or ""
+    job["work_mode"] = resolved_mode if resolved_mode and resolved_mode != "unknown" else heuristic_mode
+    job["location_display"] = en.get("en_resolved_locations") or job.get("location") or ""
+    job["location_source"] = en.get("en_resolution_source") or "listing"
+    job["location_reason"] = en.get("en_location_reason") or ""
+    job["location_ok"] = _passes(job.get("location", ""), enrichment)
+    if en:
+        job["enrichment"] = {
+            "detail_source": en.get("en_detail_source") or "",
+            "detail_status": en.get("en_detail_status") or "",
+            "locations": _json_list(en.get("en_locations_json")),
+            "workplace_type": en.get("en_workplace_type") or "",
+            "description_full": en.get("en_description_full") or "",
+            "posted_date": en.get("en_posted_date") or "",
+            "employment_type": en.get("en_employment_type") or "",
+            "llm_status": en.get("en_llm_status") or "",
+            "llm_model": en.get("en_llm_model") or "",
+            "llm": _json_obj(en.get("en_llm_json")),
+            "seniority": en.get("en_seniority") or "",
+            "role_type": en.get("en_role_type") or "",
+            "years_min": en.get("en_years_min"),
+            "years_max": en.get("en_years_max"),
+            "remote_scope": en.get("en_remote_scope") or "",
+            "resolved_country": en.get("en_resolved_country") or "",
+            "ncr_match": en.get("en_ncr_match"),
+            "enriched_at": en.get("en_enriched_at") or "",
+        }
     return job
+
+
+def _json_list(text: Any) -> list:
+    try:
+        v = json.loads(text) if isinstance(text, str) and text else []
+        return v if isinstance(v, list) else []
+    except ValueError:
+        return []
+
+
+def _json_obj(text: Any) -> dict:
+    try:
+        v = json.loads(text) if isinstance(text, str) and text else {}
+        return v if isinstance(v, dict) else {}
+    except ValueError:
+        return {}
+
+
+def _application_status_map(conn: Any) -> dict[str, dict]:
+    """job_id → latest application row (deterministic: newest last_action_at wins)."""
+    rows = conn.execute(
+        "SELECT job_id, status, applied_at, last_action_at FROM applications ORDER BY COALESCE(last_action_at, '') DESC"
+    ).fetchall()
+    out: dict[str, dict] = {}
+    for r in rows:
+        if r[0] and r[0] not in out:
+            out[r[0]] = {"status": r[1], "applied_at": r[2]}
+    return out
 
 
 def _jobs_db() -> JobDB:
@@ -263,6 +325,8 @@ def list_jobs(
                                description="strict = only NCR + global remote; all = include mislocated legacy rows"),
     title_category: str = Query("", description="product_manager | product_leadership | product_owner | product_marketing | product_design | product_analyst_ops | product_engineering | other_product"),
     work_mode: str = Query("", pattern="^(|remote|hybrid|onsite|unknown|remote_or_hybrid)$"),
+    tracked: str = Query("active", pattern="^(active|all|saved|applied|skipped|untracked)$",
+                         description="active = hide applied/interviewing/rejected/skipped (end of cycle); saved = only shortlisted; applied = applied and beyond; skipped = only skipped"),
 ) -> dict:
     db = _jobs_db()
     try:
@@ -302,10 +366,39 @@ def list_jobs(
         # services.title_filter (single source of truth) and are too rich for a
         # LIKE clause. The table is small enough to over-fetch and trim.
         rows = conn.execute(f"SELECT * FROM jobs {where} ORDER BY {order}", params).fetchall()
-        all_jobs = [_decorate_job(db._row_to_dict(r)) for r in rows]
+        raw_jobs = [db._row_to_dict(r) for r in rows]
+        enrichment = db.get_enrichment_many([j["id"] for j in raw_jobs])
+        all_jobs = [_decorate_job(j, enrichment.get(j["id"])) for j in raw_jobs]
+        app_status = _application_status_map(conn)
+        for j in all_jobs:
+            j["application"] = app_status.get(j["id"])
+
         filtered = all_jobs
+        hidden_by_location = 0
         if location_mode == "strict":
-            filtered = [j for j in filtered if is_acceptable_location(j.get("location", ""))]
+            # the resolved verdict (job page / LLM) when we have one, else the listing rule
+            kept = [j for j in filtered if j["location_ok"]]
+            hidden_by_location = len(filtered) - len(kept)
+            filtered = kept
+
+        # End-of-cycle rows (applied / interviewing / rejected / skipped) leave the list by
+        # default — the tracker owns them; the `tracked` filter brings them back.
+        def _status(j: dict) -> str:
+            return (j.get("application") or {}).get("status") or ""
+
+        hidden_by_status = 0
+        if tracked == "active":
+            kept = [j for j in filtered if _status(j) not in END_OF_CYCLE_STATUSES]
+            hidden_by_status = len(filtered) - len(kept)
+            filtered = kept
+        elif tracked == "saved":
+            filtered = [j for j in filtered if _status(j) == "shortlisted"]
+        elif tracked == "applied":
+            filtered = [j for j in filtered if _status(j) in END_OF_CYCLE_STATUSES - {"skipped"}]
+        elif tracked == "skipped":
+            filtered = [j for j in filtered if _status(j) == "skipped"]
+        elif tracked == "untracked":
+            filtered = [j for j in filtered if not _status(j)]
         if title_category:
             filtered = [j for j in filtered if j["title_category"] == title_category]
         if work_mode == "remote_or_hybrid":
@@ -316,27 +409,13 @@ def list_jobs(
         offset = (page - 1) * limit
         jobs = filtered[offset:offset + limit]
 
-        # Join with applications table for status.
-        # Ordering by last_action_at DESC and taking the first row per job_id
-        # guarantees determinism even if legacy duplicate application rows
-        # exist for the same job (from before the shared application_id_for
-        # helper landed).
-        app_rows = conn.execute(
-            "SELECT job_id, status, applied_at, last_action_at FROM applications "
-            "ORDER BY COALESCE(last_action_at, '') DESC"
-        ).fetchall()
-        app_status: dict[str, dict] = {}
-        for r in app_rows:
-            if r[0] and r[0] not in app_status:
-                app_status[r[0]] = {"status": r[1], "applied_at": r[2]}
-        for j in jobs:
-            j["application"] = app_status.get(j["id"])
-
         return {
             "jobs": jobs,
             "total": total,
             "page": page,
             "pages": (total + limit - 1) // limit,
+            "hidden_count": hidden_by_location,
+            "hidden_by_status": hidden_by_status,
         }
     finally:
         db.close()
@@ -358,7 +437,7 @@ def get_job(job_id: str) -> dict:
             (job_id,),
         ).fetchone()
         job["application"] = dict(row) if row else None
-        return _decorate_job(job)
+        return _decorate_job(job, db.get_enrichment(job_id))
     finally:
         db.close()
 
@@ -658,7 +737,7 @@ async def ws_command(ws: WebSocket, cmd: str = Query(...)):
         allowed = {
             "vc-jobs", "mnc-jobs", "funding", "run-all",
             "recommend", "outreach-enrich", "outreach-send",
-            "company-intel-refresh", "mnc-discover",
+            "company-intel-refresh", "mnc-discover", "enrich",
         }
         if cmd not in allowed:
             await ws.send_json({"type": "error", "msg": f"Command '{cmd}' not allowed"})
@@ -832,13 +911,16 @@ def get_vc_jobs(page: int = 1, limit: int = 50) -> dict:
             """SELECT * FROM jobs WHERE is_duplicate = 0 AND (platform LIKE 'vc_%' OR platform = 'vc_portals')
                ORDER BY scraped_at DESC""",
         ).fetchall()
-        all_jobs = [db._row_to_dict(r) for r in rows]
-        # Apply location filter — total must reflect the filtered set for correct pagination
-        filtered = [j for j in all_jobs if is_acceptable_location(j.get("location", ""))]
+        raw_jobs = [db._row_to_dict(r) for r in rows]
+        enrichment = db.get_enrichment_many([j["id"] for j in raw_jobs])
+        all_jobs = [_decorate_job(j, enrichment.get(j["id"])) for j in raw_jobs]
+        # Resolved verdict (job page / LLM) when we have one, else the listing rule — total
+        # must reflect the filtered set for correct pagination
+        filtered = [j for j in all_jobs if j["location_ok"]]
         total = len(filtered)
         offset = (page - 1) * limit
         jobs = filtered[offset:offset + limit]
-        return {"jobs": jobs, "total": total}
+        return {"jobs": jobs, "total": total, "hidden_count": len(all_jobs) - total}
     finally:
         db.close()
 
@@ -864,16 +946,18 @@ def get_vc_registry() -> list[dict]:
 def get_mnc_jobs(page: int = 1, limit: int = 50) -> dict:
     db = _jobs_db()
     try:
-        offset = (page - 1) * limit
         rows = db.conn.execute(
             """SELECT * FROM jobs WHERE platform LIKE 'mnc_%' AND is_duplicate = 0
-               ORDER BY priority_score DESC, scraped_at DESC LIMIT ? OFFSET ?""",
-            (limit, offset),
+               ORDER BY priority_score DESC, scraped_at DESC""",
         ).fetchall()
-        total = db.conn.execute(
-            "SELECT COUNT(*) FROM jobs WHERE platform LIKE 'mnc_%' AND is_duplicate = 0"
-        ).fetchone()[0]
-        return {"jobs": [_decorate_job(db._row_to_dict(r)) for r in rows], "total": total, "page": page, "limit": limit}
+        raw_jobs = [db._row_to_dict(r) for r in rows]
+        enrichment = db.get_enrichment_many([j["id"] for j in raw_jobs])
+        all_jobs = [_decorate_job(j, enrichment.get(j["id"])) for j in raw_jobs]
+        filtered = [j for j in all_jobs if j["location_ok"]]   # same predicate as /api/jobs
+        total = len(filtered)
+        offset = (page - 1) * limit
+        return {"jobs": filtered[offset:offset + limit], "total": total, "page": page, "limit": limit,
+                "hidden_count": len(all_jobs) - total}
     finally:
         db.close()
 
@@ -903,6 +987,16 @@ def _mnc_verdict(m, run: dict, configured: bool, job_count: int) -> str:
         return "Portal reached but 0 postings parsed — open it manually; the page is probably JS-rendered or blocked"
     err = (run.get("error") or "").splitlines()[0][:140]
     return f"Extraction failed — {err}" if err else "Extraction failed"
+
+
+@app.get("/api/enrichment/stats")
+def get_enrichment_stats() -> dict:
+    """Coverage of the structured-detail + local-LLM enrichment pass."""
+    db = _jobs_db()
+    try:
+        return db.enrichment_stats()
+    finally:
+        db.close()
 
 
 @app.get("/api/mnc-registry")
@@ -1225,14 +1319,17 @@ def get_recommendations(
     remote_only: bool = Query(False),
 ) -> list[dict]:
     db = _jobs_db()
-    jobs = db.get_top_recommended_jobs(
-        top_n=top,
-        bucket=bucket or None,
-        platform=platform or None,
-        remote_only=remote_only,
-    )
-    db.close()
-    return [j for j in jobs if is_acceptable_location(j.get("location", ""))]
+    try:
+        jobs = db.get_top_recommended_jobs(
+            top_n=top,
+            bucket=bucket or None,
+            platform=platform or None,
+            remote_only=remote_only,
+        )
+        enrichment = db.get_enrichment_many([j["id"] for j in jobs])
+    finally:
+        db.close()
+    return [j for j in jobs if _passes(j.get("location", ""), enrichment.get(j["id"]))]
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
