@@ -358,7 +358,7 @@ def get_job(job_id: str) -> dict:
             (job_id,),
         ).fetchone()
         job["application"] = dict(row) if row else None
-        return job
+        return _decorate_job(job)
     finally:
         db.close()
 

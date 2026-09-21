@@ -805,7 +805,10 @@ body::after {
       <h1>Application Tracker</h1>
       <p id="tracker-subtitle">Loading applications...</p>
     </div>
-    <button class="btn-ghost btn-sm" onclick="loadTracker()">↺ Refresh</button>
+    <div style="display:flex;gap:8px">
+      <button id="tracker-skipped-toggle" class="btn-ghost btn-sm" onclick="toggleSkippedColumn()" title="Roles you skipped stay here so they never resurface as new">Skipped (0) ▸</button>
+      <button class="btn-ghost btn-sm" onclick="loadTracker()">↺ Refresh</button>
+    </div>
   </div>
   <div id="kanban-board" style="flex:1;overflow-x:auto;padding:20px;display:flex;gap:14px;align-items:flex-start">
     <div style="color:var(--t3);font-size:13px;padding:40px">Loading...</div>
@@ -1059,6 +1062,16 @@ body::after {
 </div>
 
 <!-- YC Founder Detail Modal -->
+<div id="job-modal" style="display:none;position:fixed;inset:0;z-index:100;background:rgba(0,0,0,0.4);backdrop-filter:blur(4px);align-items:center;justify-content:center" onclick="if(event.target===this)this.style.display='none'">
+  <div style="background:var(--card);border-radius:16px;max-width:680px;width:92%;max-height:84vh;overflow-y:auto;padding:28px;box-shadow:0 20px 40px rgba(0,0,0,0.15)">
+    <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:12px;margin-bottom:12px">
+      <h2 id="job-modal-title" style="font-family:'Syne',sans-serif;font-size:18px;color:var(--t1)"></h2>
+      <button onclick="document.getElementById('job-modal').style.display='none'" style="background:none;border:none;font-size:18px;cursor:pointer;color:var(--t3)">✕</button>
+    </div>
+    <div id="job-modal-body"></div>
+  </div>
+</div>
+
 <div id="yc-modal" style="display:none;position:fixed;inset:0;z-index:100;background:rgba(0,0,0,0.4);backdrop-filter:blur(4px);align-items:center;justify-content:center">
   <div style="background:var(--card);border-radius:16px;max-width:640px;width:90%;max-height:80vh;overflow-y:auto;padding:28px;box-shadow:0 20px 40px rgba(0,0,0,0.15)">
     <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px">
@@ -1675,12 +1688,14 @@ async function resetJobStatus(id, btn) {
 // ═══════════════════════════════════════════════════
 
 const COLUMNS = [
-  { status:'shortlisted', label:'Saved',     color:DS.saved,    dot:DS.accg  },
-  { status:'applied',     label:'Applied',   color:DS.grn,      dot:DS.grng  },
-  { status:'screening',   label:'Screening', color:DS.org,      dot:DS.orgg  },
-  { status:'interview',   label:'Interview', color:DS.pur,      dot:DS.purg  },
-  { status:'offer',       label:'Offer 🎉',  color:DS.amb,      dot:DS.ambg  },
-  { status:'rejected',    label:'Rejected',  color:DS.red,      dot:DS.redg  },
+  { status:'shortlisted', label:'Saved',     color:DS.saved, dot:'var(--accg)' },
+  { status:'applied',     label:'Applied',   color:DS.grn,   dot:'var(--grng)' },
+  { status:'screening',   label:'Screening', color:DS.org,   dot:'var(--orgg)' },
+  { status:'interview',   label:'Interview', color:DS.pur,   dot:'var(--purg)' },
+  { status:'offer',       label:'Offer 🎉',  color:DS.amb,   dot:'var(--ambg)' },
+  { status:'rejected',    label:'Rejected',  color:DS.red,   dot:'var(--redg)' },
+  // Skipped roles are kept (so they never resurface as "new") but out of the way: collapsed by default.
+  { status:'skipped',     label:'Skipped',   color:DS.neu,   dot:'var(--neug)', collapsed:true },
 ];
 
 async function loadTracker() {
@@ -1691,24 +1706,36 @@ async function loadTracker() {
     const byStatus = {};
     COLUMNS.forEach(c => { byStatus[c.status] = []; });
     apps.forEach(a => { (byStatus[a.status] ? byStatus[a.status] : byStatus['shortlisted']).push(a); });
-    document.getElementById('tracker-subtitle').textContent = `${apps.length} applications across ${COLUMNS.length} stages`;
-    board.innerHTML = COLUMNS.map(col => `
-      <div class="kanban-col">
-        <div class="kanban-header">
+    STATE.trackerApps = Object.fromEntries(apps.map(a => [a.id, a]));
+    const skipped = byStatus.skipped.length, tracked = apps.length - skipped;
+    document.getElementById('tracker-subtitle').textContent =
+      `${tracked} tracked across ${COLUMNS.length - 1} stages` + (skipped ? ` · ${skipped} skipped` : '');
+    const tog = document.getElementById('tracker-skipped-toggle');
+    if (tog) { tog.textContent = `Skipped (${skipped}) ${STATE.skippedOpen ? '▾' : '▸'}`; tog.style.display = ''; }
+    board.innerHTML = COLUMNS.filter(col => !col.collapsed || STATE.skippedOpen).map(col => {
+      const n = byStatus[col.status]?.length || 0;
+      const collapsed = false;
+      return `
+      <div class="kanban-col" ${col.collapsed ? 'style="opacity:.85"' : ''}>
+        <div class="kanban-header" ${col.collapsed ? `style="cursor:pointer" onclick="toggleSkippedColumn()" title="Hide skipped roles"` : ''}>
           <div style="width:8px;height:8px;border-radius:50%;background:${col.color};flex-shrink:0;box-shadow:0 0 5px ${col.dot}"></div>
           <span style="font-size:11px;font-weight:600;color:var(--t2);text-transform:uppercase;letter-spacing:.05em">${col.label}</span>
-          <span style="margin-left:auto;font-size:10px;font-family:'JetBrains Mono',monospace;background:${col.dot};color:${col.color};border:1px solid ${col.color}44;padding:1px 6px;border-radius:10px">${byStatus[col.status]?.length||0}</span>
+          ${col.collapsed ? `<span style="font-size:10px;color:var(--t3)">▾ hide</span>` : ''}
+          <span style="margin-left:auto;font-size:10px;font-family:'JetBrains Mono',monospace;background:${col.dot};color:${col.color};border:1px solid ${col.color}44;padding:1px 6px;border-radius:10px">${n}</span>
         </div>
-        <div class="kanban-drop" id="col-${col.status}"
+        <div class="kanban-drop" id="col-${col.status}" ${collapsed ? 'style="min-height:60px"' : ''}
           ondragover="event.preventDefault();this.classList.add('drag-target')"
           ondragleave="this.classList.remove('drag-target')"
           ondrop="dropCard('${col.status}',this)">
-          ${byStatus[col.status]?.length
-            ? byStatus[col.status].map(a => renderKanbanCard(a, col.color)).join('')
-            : `<div style="border:1px dashed ${col.color}33;border-radius:8px;padding:20px;text-align:center;color:var(--t3);font-size:11px">Drop here</div>`}
+          ${collapsed
+            ? `<div style="border:1px dashed ${col.color}33;border-radius:8px;padding:14px;text-align:center;color:var(--t3);font-size:11px">${n ? `${n} skipped role${n===1?'':'s'} hidden` : 'Drop here to skip'}</div>`
+            : n
+              ? byStatus[col.status].map(a => renderKanbanCard(a, col.color)).join('')
+              : `<div style="border:1px dashed ${col.color}33;border-radius:8px;padding:20px;text-align:center;color:var(--t3);font-size:11px">Drop here</div>`}
         </div>
-      </div>
-    `).join('');
+      </div>`;
+    }).join('');
+    if (STATE.skippedOpen) board.scrollLeft = board.scrollWidth;  // bring the just-opened column into view
   } catch(e) { board.innerHTML = `<div style="padding:40px;color:var(--red)">Error: ${e.message}</div>`; }
 }
 
@@ -1716,7 +1743,8 @@ function renderKanbanCard(app, colColor) {
   const job = app.job || {};
   const days = daysSince(app.applied_at || app.last_action_at);
   const kc = colColor || DS.acc;
-  return `<div class="kanban-card fade-in" style="--kc:${kc}" draggable="true"
+  return `<div class="kanban-card fade-in" style="--kc:${kc}" draggable="true" title="Click for details"
+    onclick="showJobDetail('${app.job_id||''}','${app.id}')"
     ondragstart="startDrag('${app.id}','${app.status}',this)"
     ondragend="endDrag(this)">
     <div style="font-size:12px;font-weight:600;color:var(--t1)">${job.title||app.title}</div>
@@ -1727,6 +1755,65 @@ function renderKanbanCard(app, colColor) {
       ${pltBadge(job.platform||'—')}
     </div>
   </div>`;
+}
+
+function toggleSkippedColumn() { STATE.skippedOpen = !STATE.skippedOpen; loadTracker(); }
+
+// ── Job detail modal (kanban cards → details, posting link, stage change) ──
+async function showJobDetail(jobId, appId) {
+  const modal = document.getElementById('job-modal');
+  const title = document.getElementById('job-modal-title');
+  const body = document.getElementById('job-modal-body');
+  modal.style.display = 'flex';
+  title.textContent = 'Loading…';
+  body.innerHTML = '';
+  const esc = v => String(v ?? '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+  try {
+    const app = (STATE.trackerApps||{})[appId] || null;
+    let j = null;
+    try { j = jobId ? await GET(`/api/jobs/${jobId}`) : null; } catch(e) { j = null; }
+    if (!j && !app) throw new Error('Job not found');
+    j = j || { title: app.title, company: app.company, id: jobId };
+    const status = (j.application && j.application.status) || (app && app.status) || '';
+    title.textContent = j.title || app?.title || 'Job';
+    const reasons = (() => { try { return JSON.parse(j.score_reasons || '[]'); } catch(e) { return []; } })();
+    const meta = [j.company, j.location, j.work_mode ? j.work_mode : '', j.title_category ? j.title_category.replace(/_/g,' ') : '', j.salary_range, j.posted_date ? 'posted ' + fmtDate(j.posted_date) : '', j.experience_required]
+      .filter(Boolean).map(esc).join(' · ');
+    const stageOptions = COLUMNS.map(c => `<option value="${c.status}" ${c.status===status?'selected':''}>${c.label.replace(' 🎉','')}</option>`).join('');
+    body.innerHTML = `
+      <div style="font-size:13px;color:var(--t2);margin-bottom:10px">${meta}</div>
+      <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:14px">
+        ${pltBadge(j.platform||'—')} ${j.priority_score != null ? scoreBar(j.priority_score) : ''} ${j.priority_bucket ? bucketChip(j.priority_bucket) : ''}
+        ${status ? `<span class="chip chip-${status}" style="font-size:10px">${STATUS_LABEL[status]||status}</span>` : ''}
+      </div>
+      ${reasons.length ? `<div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:14px">${reasons.map(r=>`<span class="chip" style="font-size:10px;background:var(--accg);color:var(--acc);border:1px solid var(--br)">${esc(r).replace(/_/g,' ')}</span>`).join('')}</div>` : ''}
+      ${j.description ? `<div style="font-size:12px;color:var(--t2);line-height:1.55;max-height:220px;overflow-y:auto;padding:12px;background:var(--card2);border:1px solid var(--br);border-radius:8px;margin-bottom:16px;white-space:pre-wrap">${esc(j.description.slice(0,2500))}${j.description.length>2500?'…':''}</div>` : ''}
+      <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+        ${j.apply_link ? `<a class="btn-primary btn-sm" href="${esc(j.apply_link)}" target="_blank" rel="noopener" style="text-decoration:none">Open job posting ↗</a>` : '<span style="font-size:11px;color:var(--t3)">No link stored for this job</span>'}
+        ${j.id ? `<label style="font-size:11px;color:var(--t3);display:flex;align-items:center;gap:6px">Stage
+          <select class="select" onchange="moveJobFromModal('${esc(j.id)}', this.value)">${stageOptions}</select></label>` : ''}
+        ${status === 'skipped' && j.id ? `<button class="btn-ghost btn-sm" onclick="moveJobFromModal('${esc(j.id)}','shortlisted')">Restore to Saved</button>` : ''}
+        ${status && j.id ? `<button class="btn-ghost btn-sm" style="color:var(--red);border-color:var(--redg);margin-left:auto" onclick="untrackJobFromModal('${esc(j.id)}')">Untrack</button>` : ''}
+      </div>`;
+  } catch(e) { title.textContent = 'Error'; body.innerHTML = `<div style="color:var(--red);font-size:12px">${esc(e.message)}</div>`; }
+}
+
+async function moveJobFromModal(jobId, status) {
+  try {
+    await POST(`/api/jobs/${jobId}/status`, { status });
+    toast(`Moved to ${STATUS_LABEL[status]||status}`, 'success');
+    document.getElementById('job-modal').style.display = 'none';
+    if (STATE.currentScreen === 'tracker') loadTracker();
+  } catch(e) { toast('Error: ' + e.message, 'error'); }
+}
+
+async function untrackJobFromModal(jobId) {
+  try {
+    await DEL(`/api/jobs/${jobId}/shortlist`);
+    toast('Removed from tracker', 'info');
+    document.getElementById('job-modal').style.display = 'none';
+    if (STATE.currentScreen === 'tracker') loadTracker();
+  } catch(e) { toast('Error: ' + e.message, 'error'); }
 }
 
 function startDrag(appId, status, el) { STATE.dragJobId=appId; STATE.dragStatus=status; el.style.opacity='.5'; }
