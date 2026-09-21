@@ -47,6 +47,16 @@ class Settings(BaseSettings):
     MNC_COMPANY_TIMEOUT: int = 420      # hard wall clock per company (EY: ~120 SF pages at 2/host)
     MNC_DETAIL_TIMEOUT: int = 120       # budget for the per-company structured-detail phase (never discards the listing)
 
+    # Job enrichment (structured detail + local LLM). Ollama: `brew install ollama && brew services
+    # start ollama && ollama pull qwen2.5:3b`. When Ollama is down the pass skips the LLM, never fails.
+    ENRICH_AFTER_RUN: bool = True       # run enrichment for the jobs a run inserted
+    LLM_ENRICH_ENABLED: bool = True
+    OLLAMA_URL: str = "http://localhost:11434"
+    OLLAMA_MODEL: str = "qwen2.5:3b"    # qwen2.5:7b fits 16 GB if quality warrants it
+    LLM_MAX_INPUT_CHARS: int = 3000     # description budget per job
+    LLM_TIMEOUT: int = 90               # seconds per call (first call also loads the model)
+    LLM_NUM_CTX: int = 4096             # keep constant: a changing num_ctx reloads the model
+
     # Gmail OAuth (outreach sending)
     GMAIL_CREDENTIALS_PATH: str = "credentials/gmail_credentials.json"
     GMAIL_TOKEN_PATH: str = "credentials/gmail_token.json"

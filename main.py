@@ -144,6 +144,10 @@ async def _run_all(platforms: list[str] | None = None) -> None:
         # Dedup across platforms
         dup_count = mark_cross_platform_duplicates(all_new_jobs, db)
 
+        # Enrich (structured detail → local LLM → resolved location) before export/notify
+        # so the alert never advertises a role the job page places outside NCR.
+        await _enrich_after_run(db, [j.id for j in all_new_jobs], settings)
+
         # Export
         settings.OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
         all_jobs = db.get_all_jobs()
@@ -333,10 +337,12 @@ async def _run_vc_jobs() -> None:
     if accepted:
         db = JobDB()
         try:
+            new_ids = [j.id for j in accepted if not db.job_exists(j.id)]
             inserted, skipped = db.insert_jobs(accepted)
             typer.echo(f"\nVC portals: {inserted} new, {skipped} existing")
             settings.OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
             export_csv([j.model_dump() for j in accepted], settings.OUTPUT_DIR)
+            await _enrich_after_run(db, new_ids, settings)
         finally:
             db.close()
     else:
@@ -387,7 +393,7 @@ async def _run_mnc_jobs(
     from mnc_careers.ats.detect import SHAPE_DETECTED
     from services.dedup import mark_cross_platform_duplicates
     from services.exporter import export_csv
-    from services.location_filter import is_acceptable_location
+    from services.location_resolver import passes
 
     typer.echo("Scanning MNC careers portals (full listing → local title/location filter)...\n")
 
@@ -1336,6 +1342,43 @@ def purge_filters(
             return
         deleted = db.delete_jobs(title_ids + loc_ids)
         typer.echo(f"\n  ✓ Deleted {deleted} jobs. Run `python main.py recommend --rescore` to refresh scores.\n")
+    finally:
+        db.close()
+
+
+@app.command()
+def enrich(
+    backfill: bool = typer.Option(False, "--backfill", help="Re-run for every job, not only the ones without an enrichment row"),
+    limit: Optional[int] = typer.Option(None, "--limit", "-n", help="Max jobs to process"),
+    no_llm: bool = typer.Option(False, "--no-llm", help="Structured detail only; skip the local LLM"),
+    platform: Optional[str] = typer.Option(None, "--platform", "-p", help="Only jobs from this platform (e.g. mnc_nokia, naukri)"),
+    job_id: Optional[str] = typer.Option(None, "--job-id", help="One job id"),
+) -> None:
+    """Structured job detail (job page / ATS API) + local LLM (Ollama) → resolved location for stored jobs.
+
+    Rows that fail the resolved location check are hidden from the dashboard (never deleted).
+    """
+    _configure_logging()
+    from services.enrichment import enrich_jobs
+    from storage.db import JobDB
+
+    settings = Settings()
+    db = JobDB()
+    try:
+        stats = enrich_jobs(
+            db, only_missing=not backfill and not job_id, limit=limit, platform=platform,
+            job_ids=[job_id] if job_id else None, use_llm=not no_llm, settings=settings,
+            progress=lambda m: typer.echo(f"  {m}"),
+        )
+        typer.echo(
+            f"\nEnriched {stats.considered} job(s) in {stats.duration_s:.0f}s\n"
+            f"  structured detail: {stats.detail_ok} ok / {stats.detail_blocked} blocked / {stats.detail_fetched} fetched (+{stats.detail_reused} reused)\n"
+            f"  LLM ({settings.OLLAMA_MODEL}): {stats.llm_ok} ok / {stats.llm_called} called — {stats.llm_status}; skipped: {stats.llm_skipped_reason}\n"
+            f"  resolved by: structured {stats.resolved_structured} · AI {stats.resolved_llm} · listing {stats.resolved_listing}\n"
+            f"  hidden by location check: {stats.hidden}; verdict/work-mode changed: {stats.changed} (queued for rescoring)"
+        )
+        es = db.enrichment_stats()
+        typer.echo(f"  coverage: {es['enriched']}/{es['total_jobs']} jobs enriched, {es['hidden']} hidden overall")
     finally:
         db.close()
 
