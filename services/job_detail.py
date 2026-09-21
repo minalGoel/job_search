@@ -102,12 +102,17 @@ class DetailRecord:
 
 # ── helpers ───────────────────────────────────────────────────────────────────
 
+_PSEUDO_PLACES = {"anywhere", "remote", "worldwide", "global", "everywhere", "n/a", "na", "none", "-", "virtual", "home"}
+
+
 def _clean(s: Any) -> str:
     if s is None:
         return ""
     if isinstance(s, dict):
         s = s.get("name") or s.get("@value") or ""
-    return re.sub(r"\s+", " ", str(s)).strip()
+    out = re.sub(r"\s+", " ", str(s)).strip()
+    # RemoteOK-style JSON-LD fills city/region/country with "Anywhere": that is not a place
+    return "" if out.lower() in _PSEUDO_PLACES else out
 
 
 def _workplace_from_text(*texts: str) -> str:

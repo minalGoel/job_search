@@ -1368,7 +1368,7 @@ def enrich(
         stats = enrich_jobs(
             db, only_missing=not backfill and not job_id, limit=limit, platform=platform,
             job_ids=[job_id] if job_id else None, use_llm=not no_llm, settings=settings,
-            progress=lambda m: typer.echo(f"  {m}"),
+            progress=lambda m: typer.echo(f"  {m}"), refetch=bool(backfill or job_id),
         )
         typer.echo(
             f"\nEnriched {stats.considered} job(s) in {stats.duration_s:.0f}s\n"

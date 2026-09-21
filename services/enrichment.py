@@ -117,9 +117,9 @@ def _llm_row(res: Optional[LLMResult], model: str) -> dict:
     }
 
 
-async def _fetch_details(jobs: list[dict], previous: dict[str, dict], settings: Settings, stats: EnrichStats, log_: Any) -> dict[str, DetailRecord]:
+async def _fetch_details(jobs: list[dict], previous: dict[str, dict], settings: Settings, stats: EnrichStats, log_: Any, *, force: bool = False) -> dict[str, DetailRecord]:
     """Structured layer for every job that needs it, concurrently, per-host throttled."""
-    todo = [j for j in jobs if strategy_for(j.get("apply_link") or "") != "none" and _should_refetch(previous.get(j["id"]))]
+    todo = [j for j in jobs if strategy_for(j.get("apply_link") or "") != "none" and (force or _should_refetch(previous.get(j["id"])))]
     out: dict[str, DetailRecord] = {}
     if not todo:
         return out
@@ -161,7 +161,10 @@ async def enrich_jobs_async(
     use_llm: bool = True,
     settings: Optional[Settings] = None,
     progress: Optional[Callable[[str], None]] = None,
+    refetch: bool = False,
 ) -> EnrichStats:
+    """`refetch=True` re-reads the structured detail even when a good record is stored
+    (explicit re-runs: --job-id / --backfill); otherwise 'ok' records are reused."""
     settings = settings or Settings()
     started = time.monotonic()
     stats = EnrichStats()
@@ -175,7 +178,7 @@ async def enrich_jobs_async(
 
     # 1) structured detail, concurrently
     say(f"structured detail for {len(jobs)} job(s)…")
-    fetched = await _fetch_details(jobs, previous, settings, stats, log)
+    fetched = await _fetch_details(jobs, previous, settings, stats, log, force=refetch)
 
     # 2) LLM preflight
     extractor: Optional[OllamaExtractor] = None

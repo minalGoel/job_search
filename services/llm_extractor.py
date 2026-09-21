@@ -105,7 +105,7 @@ def verify(raw: dict, input_text: str) -> tuple[dict, list[str]]:
     kept_cities: list[str] = []
     _country_words = set(NON_INDIA_COUNTRIES) | set(NON_INDIA_COUNTRY_CODES) | {"india", "in", "ind"}
     for c in cities:
-        if _fold(c).strip() in _country_words:
+        if len(c.strip()) <= 3 or _fold(c).strip() in _country_words:
             dropped.append(f"city:{c}(country)")        # 3B models file countries under cities; boilerplate, drop
         elif not _mentions(folded, c):
             dropped.append(f"city:{c}")                 # not in the text at all → invented
