@@ -284,3 +284,12 @@ Multi-location strings that include an NCR city (`"Bengaluru; Gurgaon"`, `"Pune 
 - **SmartRecruiters returns `200 {"totalFound":0}` for a company id that does not exist**, so a slug guess can never be told apart from an empty tenant — and a *different* company can own a look-alike id (`MSC1` is Medical Science & Computing, not Mediterranean Shipping). Only trust an id that appears in the company's own page or that returns postings whose `company.name` matches.
 - **URL-shape look-alikes**: `jobs.netapp.com/search-jobs/…` is SuccessFactors classic (`/search/`), `pearson.jobs` is a DirectEmployers microsite whose real ATS is Oracle HCM (`hccz.fa.em3.oraclecloud.com`, site `CX_2`), `jobs.cisco.com/jobs/SearchJobs` (Avature-shaped) now redirects to the Phenom site `careers.cisco.com/global/en`. `mnc-discover --repair` with an override row fixes these; never hand-edit a URL without letting the real fetcher verify it.
 - `careers.hyatt.com/…/SearchJobs` is an Avature shell that is a 4.6 KB JS stub to httpx → `api_type="html"` (browser lane parses ~40 cards/page).
+
+## 35. Tracker: an unknown application status silently lands in "Saved"
+
+`loadTracker()` bucketed any status without a kanban column into `shortlisted`, so roles the user
+**skipped** (a real `APPLICATION_STATUSES` value written by the All Jobs "Skip" button) kept showing
+as saved. Every status the API can write needs a column (Skipped is collapsed behind a topbar toggle)
+— the fallback is only for corrupt data. Kanban cards were drag-only with no detail view; they now
+open a modal fed by `GET /api/jobs/{id}` (decorated with `title_category`/`work_mode` like the list).
+Regression tests: `tests/test_api_server.py`. Found by `/qa`, 2026-09-21.
