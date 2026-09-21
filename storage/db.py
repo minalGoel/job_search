@@ -53,6 +53,9 @@ class JobDB:
         db_path.parent.mkdir(parents=True, exist_ok=True)
         self.conn = sqlite3.connect(str(db_path))
         self.conn.row_factory = sqlite3.Row
+        # `main.py enrich` commits per job for up to an hour while the dashboard reads:
+        # wait instead of raising "database is locked".
+        self.conn.execute("PRAGMA busy_timeout = 5000")
         self._init_tables()
         self._migrate_columns()
         self._ensure_indexes()
@@ -126,6 +129,42 @@ class JobDB:
                 timestamp TEXT NOT NULL
             );
             CREATE INDEX IF NOT EXISTS idx_source_runs_lookup ON source_runs(source, company, timestamp);
+
+            -- Per-job enrichment: the structured detail record behind a listing (Oracle/Workday
+            -- API, JSON-LD, microdata), the local-LLM extraction, and the *resolved* location
+            -- the filters/scoring/dashboard use. All columns are en_-prefixed so a
+            -- `LEFT JOIN ... SELECT *` never shadows a jobs column. jobs.location itself is
+            -- never rewritten (dedup_hash depends on it).
+            CREATE TABLE IF NOT EXISTS job_enrichment (
+                job_id TEXT PRIMARY KEY,
+                en_detail_source TEXT DEFAULT '',
+                en_detail_url TEXT DEFAULT '',
+                en_detail_status TEXT DEFAULT '',
+                en_detail_fetched_at TEXT,
+                en_locations_json TEXT DEFAULT '[]',
+                en_workplace_type TEXT DEFAULT '',
+                en_description_full TEXT DEFAULT '',
+                en_posted_date TEXT DEFAULT '',
+                en_employment_type TEXT DEFAULT '',
+                en_llm_model TEXT DEFAULT '',
+                en_llm_status TEXT DEFAULT '',
+                en_llm_json TEXT DEFAULT '',
+                en_remote_scope TEXT DEFAULT '',
+                en_resolved_locations TEXT DEFAULT '',
+                en_resolved_country TEXT DEFAULT '',
+                en_resolved_work_mode TEXT DEFAULT '',
+                en_ncr_match INTEGER,
+                en_location_ok INTEGER,
+                en_resolution_source TEXT DEFAULT '',
+                en_location_reason TEXT DEFAULT '',
+                en_seniority TEXT DEFAULT '',
+                en_role_type TEXT DEFAULT '',
+                en_years_min INTEGER,
+                en_years_max INTEGER,
+                en_enriched_at TEXT,
+                en_description_hash TEXT DEFAULT ''
+            );
+            CREATE INDEX IF NOT EXISTS idx_enrichment_ok ON job_enrichment(en_location_ok);
 
             CREATE TABLE IF NOT EXISTS company_profiles (
                 normalized_company TEXT PRIMARY KEY,
@@ -384,6 +423,7 @@ class JobDB:
             return 0
         placeholders = ",".join("?" * len(ids))
         self.conn.execute(f"DELETE FROM job_connection_matches WHERE job_id IN ({placeholders})", ids)
+        self.conn.execute(f"DELETE FROM job_enrichment WHERE job_id IN ({placeholders})", ids)
         self.conn.execute(f"DELETE FROM jobs WHERE id IN ({placeholders})", ids)
         self.conn.commit()
         return len(ids)
@@ -763,6 +803,90 @@ class JobDB:
             ),
         )
         self.conn.commit()
+
+    # ------------------------------------------------------------------
+    # job_enrichment — structured detail + LLM extraction + resolved location
+    # ------------------------------------------------------------------
+
+    ENRICHMENT_COLUMNS = (
+        "en_detail_source", "en_detail_url", "en_detail_status", "en_detail_fetched_at", "en_locations_json",
+        "en_workplace_type", "en_description_full", "en_posted_date", "en_employment_type",
+        "en_llm_model", "en_llm_status", "en_llm_json", "en_remote_scope",
+        "en_resolved_locations", "en_resolved_country", "en_resolved_work_mode", "en_ncr_match", "en_location_ok",
+        "en_resolution_source", "en_location_reason", "en_seniority", "en_role_type", "en_years_min", "en_years_max",
+        "en_enriched_at", "en_description_hash",
+    )
+
+    def upsert_enrichment(self, job_id: str, row: dict) -> None:
+        """Insert or update one job's enrichment. Only the keys present in `row` are written
+        on update (COALESCE-free: an explicit None clears a value), so the structured pass
+        and the later LLM pass can each write their own columns."""
+        cols = [c for c in self.ENRICHMENT_COLUMNS if c in row]
+        if not cols:
+            return
+        values = [json.dumps(row[c]) if isinstance(row[c], (list, dict)) else row[c] for c in cols]
+        assignments = ", ".join(f"{c} = excluded.{c}" for c in cols)
+        self.conn.execute(
+            f"""INSERT INTO job_enrichment (job_id, {', '.join(cols)}) VALUES (?, {', '.join('?' * len(cols))})
+                ON CONFLICT(job_id) DO UPDATE SET {assignments}""",
+            [job_id, *values],
+        )
+        self.conn.commit()
+
+    def get_enrichment(self, job_id: str) -> Optional[dict]:
+        row = self.conn.execute("SELECT * FROM job_enrichment WHERE job_id = ?", (job_id,)).fetchone()
+        return dict(row) if row else None
+
+    def get_enrichment_many(self, job_ids: list[str]) -> dict[str, dict]:
+        out: dict[str, dict] = {}
+        for i in range(0, len(job_ids), 500):
+            chunk = job_ids[i:i + 500]
+            placeholders = ",".join("?" * len(chunk))
+            for r in self.conn.execute(f"SELECT * FROM job_enrichment WHERE job_id IN ({placeholders})", chunk).fetchall():
+                out[r["job_id"]] = dict(r)
+        return out
+
+    def jobs_needing_enrichment(self, *, only_missing: bool = True, limit: Optional[int] = None,
+                                platform: Optional[str] = None, job_ids: Optional[list[str]] = None) -> list[dict]:
+        """Non-duplicate jobs with no enrichment row (or all, for a backfill), newest first."""
+        where = ["j.is_duplicate = 0"]
+        params: list = []
+        if only_missing:
+            where.append("e.job_id IS NULL")
+        if platform:
+            where.append("j.platform LIKE ?")
+            params.append(platform if "%" in platform else platform)
+        if job_ids:
+            where.append(f"j.id IN ({','.join('?' * len(job_ids))})")
+            params.extend(job_ids)
+        sql = f"""SELECT j.* FROM jobs j LEFT JOIN job_enrichment e ON e.job_id = j.id
+                  WHERE {' AND '.join(where)} ORDER BY j.scraped_at DESC"""
+        if limit:
+            sql += f" LIMIT {int(limit)}"
+        return [self._row_to_dict(r) for r in self.conn.execute(sql, params).fetchall()]
+
+    def enrichment_stats(self) -> dict:
+        total = self.conn.execute("SELECT COUNT(*) FROM jobs WHERE is_duplicate = 0").fetchone()[0]
+        rows = self.conn.execute(
+            """SELECT e.en_resolution_source AS src, e.en_location_ok AS ok, COUNT(*) AS n
+               FROM job_enrichment e JOIN jobs j ON j.id = e.job_id WHERE j.is_duplicate = 0
+               GROUP BY 1, 2"""
+        ).fetchall()
+        by_source: dict[str, int] = {}
+        hidden = 0
+        enriched = 0
+        for r in rows:
+            by_source[r["src"] or ""] = by_source.get(r["src"] or "", 0) + r["n"]
+            enriched += r["n"]
+            if r["ok"] == 0:
+                hidden += r["n"]
+        llm = self.conn.execute(
+            "SELECT en_llm_status, COUNT(*) FROM job_enrichment WHERE en_llm_status != '' GROUP BY 1"
+        ).fetchall()
+        return {
+            "total_jobs": total, "enriched": enriched, "pending": max(total - enriched, 0),
+            "hidden": hidden, "by_source": by_source, "llm": {r[0]: r[1] for r in llm},
+        }
 
     # ------------------------------------------------------------------
     # source_runs — per-company diagnostics for MNC/VC style sources
