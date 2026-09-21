@@ -402,8 +402,8 @@ body::after {
 }
 
 /* ── SCORE BAR ──────────────────────────────── */
-.score-bar{display:flex;align-items:center;gap:7px}
-.score-track{flex:1;height:4px;background:var(--surf);border-radius:4px;overflow:hidden}
+.score-bar{display:flex;align-items:center;gap:7px;min-width:88px}  /* narrow table cells squeezed the track to ~3px */
+.score-track{flex:1;min-width:48px;height:4px;background:var(--surf);border-radius:4px;overflow:hidden}
 .score-fill{height:100%;border-radius:4px;transition:width .4s ease}
 
 /* ── KANBAN ─────────────────────────────────── */
