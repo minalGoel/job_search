@@ -5,7 +5,7 @@
 > Every agent that writes code in this repo must first read the three protocol files in `docs/`:
 >
 > 1. **[`docs/known_edge_cases.md`](docs/known_edge_cases.md)** — data shapes, API quirks, and runtime scenarios that have broken naive implementations (with file + line references). Use this as a lookup when designing new scrapers, API endpoints, or scoring logic.
-> 2. **[`docs/guidelines_and_learnings.md`](docs/guidelines_and_learnings.md)** — 18 codified principles (single source of truth, defense in depth, `try/finally` + sentinel, `COALESCE` for partial updates, token-bucket rate limiters, etc.).
+> 2. **[`docs/guidelines_and_learnings.md`](docs/guidelines_and_learnings.md)** — 25 codified principles (single source of truth, defense in depth, `try/finally` + sentinel, `COALESCE` for partial updates, token-bucket rate limiters, etc.).
 > 3. **[`docs/protocol_to_identify_issues.md`](docs/protocol_to_identify_issues.md)** — seven-phase audit protocol used when auditing a class of bugs. Follow this when the user says "check for bugs" or "audit X" — do NOT start editing files before completing Phase 0–2.
 >
 > After shipping a fix, update `known_edge_cases.md` with the new case and promote patterns into `guidelines_and_learnings.md` when seen more than once.
@@ -14,7 +14,7 @@
 
 ## Project Context
 
-This is a Python async CLI tool for aggregating PM job listings across 14 platforms, VC portals, MNC career pages, funding trackers, and automated email outreach. The user is a Senior PM candidate targeting Delhi NCR, 5-7 yrs exp, 50+ LPA, Tech/SaaS/B2B.
+This is a Python async CLI tool for aggregating PM job listings across 14 active job-board scrapers (11 boards + 3 API aggregators; Wellfound/Glassdoor disabled), VC portals, ~350 MNC careers portals, funding trackers, and automated email outreach. **All title/location filtering is ours** (`services/title_filter.py`, `services/location_filter.py`) — portal search params are volume hints only. Title gate = anything with "product" (categories sort PM vs leadership vs owner vs marketing); location = mentions NCR (any spelling) or remote, remote/hybrid preferred in scoring. The user is a Senior PM candidate targeting Delhi NCR, 5-7 yrs exp, 50+ LPA, Tech/SaaS/B2B.
 
 ## Agent Roles
 
@@ -27,9 +27,13 @@ This is a Python async CLI tool for aggregating PM job listings across 14 platfo
 - `models/job.py` — the Job Pydantic model (all scrapers must return `list[Job]`)
 - `config/search_params.py` — SearchParams dataclass with titles, location, experience, CTC
 - `services/cookie_manager.py` — LOGIN_URLS dict (add here if login-gated)
+- `services/preflight.py` — decides whether a scraper can run (cookies / API keys); skips are `"skipped: …"` notes, not errors
+- `scrapers/api_base.py` — `APIScraper` base + `stable_link`/`stable_job_id`/`strip_html`/`parse_iso_date`/`parse_epoch` for httpx-only scrapers
 
 **Patterns to follow**:
-- Extend `BaseScraper`, set `name` and `requires_login` class attributes
+- Extend `BaseScraper` (or `APIScraper` for httpx-only), set `name`, `requires_login`, `uses_browser` (False for httpx-only so Chromium isn't launched) and `required_settings` (Settings attribute names for API keys; blank ⇒ the scraper is skipped, not failed)
+- Raise `ScraperSkipped` when a run can't proceed for a configuration reason (401/403 on an API key); never return `[]` silently
+- Title relevance is `services.title_filter.is_relevant_title()` — never a private keyword list
 - Use `self._get_page(url)` for Playwright navigation (adds stealth + delays)
 - Use `self._log` (structlog) for all logging
 - Use BeautifulSoup for HTML parsing, `await page.content()` to get HTML
@@ -38,7 +42,7 @@ This is a Python async CLI tool for aggregating PM job listings across 14 platfo
 - Always close pages after use: `await page.close()`
 - Handle errors per-card (try/except inside the loop), log and continue
 - Parse relative dates ("2 days ago") with a `_parse_relative_date()` helper
-- **Never hardcode search queries** — always use `self.search_params.title_keywords[0]` so the scraper respects SearchParams
+- **Never hardcode search queries** — always use `self.search_params.title_keywords[0]` so the scraper respects SearchParams; server-side params are a coarse pre-filter, `is_relevant_title` + `is_acceptable_location` in memory are authoritative
 - **Guard `_get_page` failures**: wrap `page.goto()` in try/except and call `await page.close()` before re-raising, to prevent browser resource leaks
 
 **Anti-scraping considerations**:
@@ -60,9 +64,20 @@ This is a Python async CLI tool for aggregating PM job listings across 14 platfo
 **When to use**: Updating VC fund data, MNC lists, or job portal registries.
 
 **Key files**:
-- `vc_portals/registry.py` — 30 VCFund dataclass instances with portal URLs
-- `mnc_careers/registry.py` — 42 MNC dataclass instances with career page URLs
+- `vc_portals/registry.py` — 37 VCFund dataclass instances with portal URLs
+- `mnc_careers/registry.py` — ~350 MNC dataclass instances (`hq_country`, `api_type` override, `pm_search_url` = *listing* URL); two lists (`_EXISTING_REGISTRY` + `_ADDED_FROM_CSV_2026_09`, concatenated into `MNC_REGISTRY`; `ADDED_FROM_CSV` names the CSV-sourced group)
+- `mnc_careers/links.py` — derives website / LinkedIn links for the dashboard's **Companies** screen (`/#companies`, backed by `/api/mnc-registry`: links, CSV provenance, per-company verdict)
+- `mnc_careers/data/mnc_input.csv` + `discovery_overrides.csv` — the input company list and hand-researched candidate URLs
 - `services/cookie_manager.py` — LOGIN_URLS dict
+
+### MNC Careers Agent
+**When to use**: Adding companies, fixing dead careers URLs, adding an ATS fetcher.
+
+**How it works**: `mnc_careers/scraper.py` runs two lanes — API (httpx, typed fetchers in `mnc_careers/ats/`: workday, greenhouse, lever, smartrecruiters, successfactors (classic + Unify), phenom, radancy, oracle_hcm, avature, amazon_jobs) and HTML (Playwright, `mnc_careers/html_generic.py` with JSON interception + card selectors + pagination + consent-banner dismissal). Every fetcher pulls the **full listing** (cap `MNC_MAX_POSTINGS`; keyword "net" only on cap-hit) and `mnc_careers/filter.py` applies the shared title/location filters. Per-company outcomes go to `source_runs`.
+
+**Commands**: `mnc-jobs [--only A,B] [--ats workday] [--dry-run] [--cap N]`; `mnc-discover [--dry-run] [--browser] [--only …]` (probe + verify → `output/mnc_discovery_entries.py` paste-ready literals); `mnc-discover --repair [--ats workday] [--apply] [--apply-fallbacks]` (re-verify existing entries, sweep Workday host×site variants, patch `registry.py`).
+
+**Rules**: `platform_for()` is the Job.platform formula — never change it (Job.id depends on it). `api_type=""` means auto-detect; `"html"` forces the browser lane. Detected `eightfold` sites run in the HTML lane (API returns 403 to non-browsers). `phenom`, `radancy` and `avature` are detected from the URL shape only — when the first page doesn't behave like that ATS the fetcher raises `NotThisATS` and the company is rerouted to the HTML lane in the same run. Acquired companies whose tenant is retired (Juniper → HPE, Ansys → Synopsys) stay in the registry with `pm_search_url=""` and an `ABSORBED` note — not a target, still resolvable. Never add a company by hand-typing a URL — run `mnc-discover` so it is verified by the real fetcher. Fuzzy name matches are advisory; `CSV_ALIASES` is the alias truth.
 
 ### Service Agent
 **When to use**: Modifying dedup logic, email notifications, export format, or scheduling.
@@ -173,9 +188,9 @@ This is a Python async CLI tool for aggregating PM job listings across 14 platfo
 - `main.py` — Typer CLI with all commands, `_run_all()` orchestrates scrape → dedup → export → notify
 - `config/settings.py` — Pydantic-settings loading from .env
 
-**CLI command map (24 commands)**:
+**CLI command map (25 commands)**:
 - `run`, `schedule`, `login`, `export`, `status` — core job scraping
-- `funding`, `vc-jobs`, `mnc-jobs`, `run-all` — supplementary sources
+- `funding`, `vc-jobs`, `mnc-jobs`, `mnc-discover`, `run-all` — supplementary sources
 - `recommend`, `today`, `company-intel-refresh`, `connections-import` — decision engine
 - `shortlist`, `apply-status`, `pipeline-status` — application tracker
 - `draft-message` — outreach message generator
@@ -187,7 +202,7 @@ This is a Python async CLI tool for aggregating PM job listings across 14 platfo
 1. **playwright_stealth API**: v2 uses `Stealth().apply_stealth(context)`, NOT `stealth_async(context)`
 2. **Python 3.9 compatibility**: Use `from __future__ import annotations` in every file for `X | Y` type unions
 3. **Import paths**: Project uses absolute imports from project root (e.g., `from models.job import Job`). `sys.path.insert(0, project_root)` is set in main.py.
-4. **Cookie paths**: Use `Path("cookies")` relative path in scrapers — the BrowserManager resolves it relative to CWD
+4. **Cookie paths**: Use `self.cookies_dir` (= `settings.COOKIES_DIR`, absolute) — never a CWD-relative `Path("cookies")`. `.env` is likewise loaded from `BASE_DIR/.env`
 5. **SQLite thread safety**: `JobDB` and `OutreachDB` each use a single connection; don't share across threads (asyncio is fine since it's single-threaded)
 6. **Selector fragility**: CSS selectors in scrapers WILL break when sites update. Use multiple fallback selectors with `or` chains: `soup.select("div.new-class") or soup.select("div.old-class")`
 7. **Two separate databases**: Jobs in `output/jobs.db` (via `storage/db.py`), outreach in `output/outreach.db` (via `outreach/db.py`). Don't mix them.
@@ -202,7 +217,10 @@ This is a Python async CLI tool for aggregating PM job listings across 14 platfo
 
 ## Testing Approach
 
-- **Smoke test**: `python main.py run -p remoteok` (API-based, no browser needed, fastest feedback)
+- **Unit tests**: `.venv/bin/python -m unittest discover -s tests -t .` (title filter, preflight, api_base, aggregator parsers, ATS detect/fetchers, MNC filter/registry, DB migrations)
+- **Smoke test**: `python main.py run -p remoteok` (API-based, no browser launched, fastest feedback)
+- **Skip path**: `python main.py run -p cutshort` → `SKIPPED — no cookies`, exit 0 in < 5 s
+- **MNC test**: `python main.py mnc-jobs --only "SAP,Autodesk,Razorpay" --dry-run` (per-company table, nothing written)
 - **Browser test**: `python main.py run -p naukri` (Playwright + HTML parsing)
 - **Login test**: `python main.py login instahyre` (headed browser, manual login)
 - **Full test**: `python main.py run-all` (all sources)
@@ -221,4 +239,22 @@ This is a Python async CLI tool for aggregating PM job listings across 14 platfo
 - Services are stateless functions/classes (except JobDB/OutreachDB which hold connections)
 - Outreach has its own DB, models, and pipeline — separate from the scraping pipeline
 - Credentials go in `credentials/` (gitignored), API keys go in `.env` (gitignored)
-- No test files yet — add to `tests/` directory when needed
+- Tests live in `tests/` (unittest; fixtures in `tests/fixtures/`). Run from the repo root with `-m unittest discover -s tests -t .`
+
+## Skill routing
+
+When the user's request matches an available skill, invoke it via the Skill tool. When in doubt, invoke the skill.
+
+Key routing rules:
+- Product ideas/brainstorming → invoke /office-hours
+- Strategy/scope → invoke /plan-ceo-review
+- Architecture → invoke /plan-eng-review
+- Design system/plan review → invoke /design-consultation or /plan-design-review
+- Full review pipeline → invoke /autoplan
+- Bugs/errors → invoke /investigate
+- QA/testing site behavior → invoke /qa or /qa-only
+- Code review/diff check → invoke /review
+- Visual polish → invoke /design-review
+- Ship/deploy/PR → invoke /ship or /land-and-deploy
+- Save progress → invoke /context-save
+- Resume context → invoke /context-restore

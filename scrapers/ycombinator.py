@@ -9,6 +9,7 @@ from bs4 import BeautifulSoup
 
 from models.job import Job
 from scrapers.base import BaseScraper
+from services.title_filter import is_relevant_title, explain_title
 from services.location_filter import is_acceptable_location, explain as explain_location
 
 log = structlog.get_logger(__name__)
@@ -83,12 +84,6 @@ class YCombinatorScraper(BaseScraper):
         job_links = soup.select('a[href*="/companies/"][href*="/jobs/"]')
         self._log.info("html.job_links_found", count=len(job_links))
 
-        pm_keywords = {
-            "product manager", "product management", "senior pm",
-            "head of product", "director of product", "director product",
-            "vp product", "chief product", "associate pm",
-        }
-
         seen: set[str] = set()
 
         for link in job_links:
@@ -100,8 +95,9 @@ class YCombinatorScraper(BaseScraper):
                     continue
                 seen.add(href)
 
-                # Filter to PM roles only
-                if not any(kw in title.lower() for kw in pm_keywords):
+                # Filter to target roles — config-driven (services/title_filter.py)
+                if not is_relevant_title(title):
+                    self._log.debug("item.title_rejected", title=title, reason=explain_title(title))
                     continue
 
                 apply_link = (

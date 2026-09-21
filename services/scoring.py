@@ -24,7 +24,9 @@ from config.scoring_rules import (
     RECENCY_BONUSES,
     SALARY_SCORES,
     TITLE_WEIGHTS,
+    WORK_MODE_BONUS,
 )
+from services.location_filter import work_mode as _work_mode
 from services.semantic_scorer import score_semantic
 
 
@@ -170,6 +172,13 @@ def score_job(job: dict, company_profile: Optional[dict] = None) -> dict:
         relevance += LOCATION_MISMATCH_SCORE
         flags.append("non_target_location")
 
+    # Work mode — the user prefers remote/hybrid roles (config/scoring_rules.WORK_MODE_BONUS)
+    mode = _work_mode(job.get("location", ""), job.get("title", ""), job.get("description", ""))
+    mode_bonus = WORK_MODE_BONUS.get(mode, 0)
+    if mode_bonus:
+        relevance += mode_bonus
+        reasons.append(f"{mode}_role")
+
     # Recency
     age = _days_old(posted_date)
     if age is not None:
@@ -250,6 +259,10 @@ def score_job(job: dict, company_profile: Optional[dict] = None) -> dict:
     if company_profile:
         if company_profile.get("is_mnc"):
             quality += COMPANY_QUALITY_SCORES["mnc"]
+        if company_profile.get("hq_country"):
+            # On the user's target MNC list (mnc_careers/data/mnc_input.csv)
+            quality += COMPANY_QUALITY_SCORES["target_mnc"]
+            reasons.append("target_mnc")
         if company_profile.get("is_funded"):
             quality += COMPANY_QUALITY_SCORES["recent_funding"]
             reasons.append("funded_company_quality")
@@ -315,7 +328,7 @@ def score_job(job: dict, company_profile: Optional[dict] = None) -> dict:
     if any(kw in company_lower for kw in AGENCY_KEYWORDS):
         flags.append("agency_or_staffing_company")
 
-    if loc_match and "remote" in location:
+    if mode == "remote" and "remote_friendly" not in reasons:
         reasons.append("remote_friendly")
 
     # Deduplicate while preserving order

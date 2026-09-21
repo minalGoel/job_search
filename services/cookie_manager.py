@@ -5,6 +5,7 @@ from pathlib import Path
 import structlog
 
 from browser.context import BrowserManager
+from services.preflight import has_cookies  # noqa: F401 — re-exported; canonical home is preflight
 
 log = structlog.get_logger(__name__)
 
@@ -50,7 +51,3 @@ async def interactive_login(platform: str, cookies_dir: Path) -> bool:
         print(f"  Cookies saved for {platform}.\n")
         return True
 
-
-def has_cookies(platform: str, cookies_dir: Path) -> bool:
-    """Check if saved cookies exist for a platform."""
-    return (cookies_dir / f"{platform}.json").exists()

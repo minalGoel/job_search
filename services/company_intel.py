@@ -70,6 +70,7 @@ def build_company_profiles(db: "JobDB") -> int:
                 "seen_platforms": list(existing.get("seen_platforms") or []),
                 "careers_page": existing.get("careers_page"),
                 "hq_location": existing.get("hq_location"),
+                "hq_country": existing.get("hq_country") or "",
                 "last_refreshed_at": datetime.now().isoformat(),
             }
         return profiles[slug]
@@ -84,6 +85,7 @@ def build_company_profiles(db: "JobDB") -> int:
             p = _get_or_create(slug, mnc.name)
             p["is_mnc"] = 1
             p["hq_location"] = mnc.delhi_ncr_office or p.get("hq_location")
+            p["hq_country"] = mnc.hq_country or p.get("hq_country") or ""
             p["careers_page"] = mnc.careers_url or p.get("careers_page")
             if mnc.careers_url:
                 p["company_domain"] = _extract_domain(mnc.careers_url)

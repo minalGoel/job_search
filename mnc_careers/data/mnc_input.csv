@@ -1,0 +1,210 @@
+#,Company,HQ / qualifying parent country
+1,Accenture,Ireland
+2,Capgemini,France
+3,Nagarro,Germany
+4,Ericsson,Sweden
+5,Nokia,Finland
+6,Orange Business,France
+7,BT Group,United Kingdom
+8,SAP,Germany
+9,Amadeus IT Group,Spain
+10,Dassault Systèmes,France
+11,IDEMIA,France
+12,SITA,Switzerland
+13,Travelport,United Kingdom
+14,Teleperformance / TP,France
+15,Worldline,France
+16,PayU / Prosus,Netherlands
+17,RELX / Elsevier,United Kingdom
+18,Deloitte,United Kingdom
+19,EY,United Kingdom
+20,KPMG,United Kingdom
+21,PwC,United Kingdom
+22,Grant Thornton International / Grant Thornton Bharat,United Kingdom
+23,BDO Global / BDO India,Belgium
+24,Forvis Mazars,France
+25,RSM International / RSM India,United Kingdom
+26,TMF Group,Netherlands
+27,Kantar,United Kingdom
+28,Ipsos,France
+29,Havas,France
+30,Publicis Groupe,France
+31,WPP,United Kingdom
+32,GlobalData,United Kingdom
+33,Bertelsmann,Germany
+34,Antal International,United Kingdom
+35,PageGroup,United Kingdom
+36,Randstad,Netherlands
+37,Adecco Group,Switzerland
+38,Egon Zehnder,Switzerland
+39,NatWest Group,United Kingdom
+40,HSBC,United Kingdom
+41,Standard Chartered,United Kingdom
+42,Deutsche Bank,Germany
+43,Swiss Re,Switzerland
+44,AXA / AXA XL,France
+45,Aviva,United Kingdom
+46,Aon,United Kingdom global HQ; Ireland domicile
+47,WTW,United Kingdom global HQ; Ireland domicile
+48,Howden Group,United Kingdom
+49,Fidelity International,United Kingdom
+50,London Stock Exchange Group,United Kingdom
+51,Evalueserve,Switzerland
+52,Acuity Knowledge Partners,United Kingdom
+53,A.P. Moller–Maersk,Denmark
+54,DSV,Denmark
+55,Kuehne+Nagel,Switzerland
+56,DHL Group,Germany
+57,CMA CGM,France
+58,CEVA Logistics,France
+59,GEODIS,France
+60,Hapag-Lloyd,Germany
+61,Rhenus Logistics,Germany
+62,Hellmann Worldwide Logistics,Germany
+63,MSC,Switzerland
+64,Lufthansa Group,Germany
+65,Savills,United Kingdom
+66,Knight Frank,United Kingdom
+67,Mace,United Kingdom
+68,Turner & Townsend,United Kingdom
+69,Gleeds,United Kingdom
+70,Currie & Brown,United Kingdom
+71,Sodexo,France
+72,Rentokil Initial,United Kingdom
+73,Securitas,Sweden
+74,G4S,United Kingdom global HQ; US ultimate parent
+75,Ramboll,Denmark
+76,Egis,France
+77,Mott MacDonald,United Kingdom
+78,Bureau Veritas,France
+79,SGS,Switzerland
+80,Intertek,United Kingdom
+81,TÜV SÜD,Germany
+82,TÜV Rheinland,Germany
+83,Schneider Electric,France
+84,Siemens,Germany
+85,Signify,Netherlands
+86,Philips,Netherlands
+87,BMW Group,Germany
+88,Volvo Cars,Sweden
+89,Rolls-Royce Holdings,United Kingdom
+90,Michelin,France
+91,Hilti,Liechtenstein
+92,Knauf,Germany
+93,AkzoNobel,Netherlands
+94,Nestlé,Switzerland
+95,Reckitt,United Kingdom
+96,Haleon,United Kingdom
+97,Pernod Ricard,France
+98,Carlsberg Group,Denmark
+99,Diageo,United Kingdom
+100,Adidas,Germany
+101,Kering / Kering Eyewear,France parent; Kering Eyewear HQ Italy
+102,Accor,France
+103,IHG Hotels & Resorts,United Kingdom
+104,Radisson Hotel Group,Belgium
+105,Bosch,Germany
+106,S&P Global,United States
+107,Cargill,United States
+108,BlackRock,United States
+109,JLL,United States
+110,Google,United States
+111,Tesla,United States
+112,Microsoft,United States
+113,IBM,United States
+114,American Express,United States
+115,Bank of America,United States
+116,JPMorgan Chase,United States
+117,Meta,United States
+118,Oracle,United States
+119,Uber,United States
+120,Coca-Cola,United States
+121,Hines,United States
+122,Hyatt,United States
+123,Stryker,United States
+124,Marsh McLennan,United States
+125,CBRE,United States
+126,Cushman & Wakefield,United States
+127,McKinsey & Company,United States
+128,Boston Consulting Group,United States
+129,Bain & Company,United States
+130,Kearney,United States
+131,Gartner,United States
+132,Moody's,United States
+133,Morningstar,United States
+134,Concentrix,United States
+135,Genpact,United States
+136,Adobe,United States
+137,Ciena,United States
+138,Sabre,United States
+139,HCLTech,India
+140,TCS,India
+141,Infosys,India
+142,Wipro,India
+143,Tech Mahindra,India
+144,Air India,India
+145,IndiGo,India
+146,Maruti Suzuki,Japan ultimate parent
+147,Hyundai Motor,South Korea
+148,Samsung,South Korea
+149,NTT / NTT Data,Japan
+150,Huawei,China
+151,ZTE,China
+152,DP World,United Arab Emirates
+153,ANZ,Australia
+154,BHP,Australia
+155,Sony,Japan
+156,Colliers,Canada
+157,WSP,Canada
+158,AtkinsRéalis,Canada
+159,Medtronic,Ireland legal domicile / US operational HQ
+160,Johnson Controls,Ireland domicile / US operating HQ
+161,Trane Technologies,Ireland domicile / substantial US HQ nexus
+162,Sopra Steria,France
+163,Airbus,Netherlands/France European group
+164,Crédit Agricole,France
+165,Safran,France
+166,Thales,France
+167,Barclays,United Kingdom
+168,UBS,Switzerland
+169,BNP Paribas,France
+170,Société Générale,France
+171,AstraZeneca,United Kingdom
+172,Novartis,Switzerland
+173,Roche,Switzerland
+174,BASF,Germany
+175,Bayer,Germany
+176,Unilever / HUL,United Kingdom parent
+177,L'Oréal,France
+178,Danone,France
+179,IKEA / Ingka,Netherlands
+180,LEGO Group,Denmark
+181,Vestas,Denmark
+182,Danfoss,Denmark
+183,Grundfos,Denmark
+184,Atlas Copco,Sweden
+185,Sandvik,Sweden
+186,SKF,Sweden
+187,Alfa Laval,Sweden
+188,KONE,Finland
+189,Wärtsilä,Finland
+190,Merck KGaA,Germany
+191,Fresenius,Germany
+192,Pearson,United Kingdom
+193,Springer Nature,Germany/United Kingdom
+194,Roland Berger,Germany
+195,Allianz Trade / Allianz,Germany
+196,British Airways / IAG,United Kingdom / Spain
+197,Air France-KLM,France / Netherlands
+198,SYSTRA,France
+199,Compass Group,United Kingdom
+200,ISS A/S,Denmark
+201,Pirelli,Italy
+202,Oriflame,Switzerland
+203,HBX Group / Hotelbeds,Spain
+204,Atos,France
+205,Capita,United Kingdom
+206,Computacenter,United Kingdom
+207,Colt Technology Services,United Kingdom
+208,Dachser,Germany
+209,DNV,Norway

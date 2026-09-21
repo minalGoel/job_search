@@ -100,7 +100,7 @@ class NaukriScraper(BaseScraper):
                     pass
 
         # Register listener BEFORE navigation so we catch the first load
-        context = await self.bm.get_context(self.name, Path("cookies"))
+        context = await self.bm.get_context(self.name, self.cookies_dir)
         page = None  # sentinel — ensures finally block is safe even if new_page() raises
         try:
             page = await context.new_page()

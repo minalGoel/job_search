@@ -9,6 +9,7 @@ import httpx
 import structlog
 
 from models.job import Job
+from scrapers.api_base import parse_epoch
 from scrapers.base import BaseScraper
 from services.location_filter import is_acceptable_location, explain as explain_location
 
@@ -36,6 +37,7 @@ class HiristScraper(BaseScraper):
 
     name: str = "hirist"
     requires_login: bool = False
+    uses_browser: bool = False
 
     async def scrape(self) -> list[Job]:
         all_jobs: list[Job] = []
@@ -121,21 +123,23 @@ class HiristScraper(BaseScraper):
                 ]
                 skills = [s.strip() for s in skills if s.strip()]
 
-                # Apply link
+                # Apply link. The API stopped returning jobDetailUrl/applyUrl
+                # (Sept 2026) — every item was silently dropped. Build the
+                # canonical URL from the numeric id; hirist.tech/j/{id} → 200.
                 apply_link = item.get("jobDetailUrl", "") or item.get("applyUrl", "")
                 if apply_link and not apply_link.startswith("http"):
                     apply_link = f"https://www.hirist.tech{apply_link}"
+                if not apply_link:
+                    job_id = item.get("id") or item.get("refJobId")
+                    if job_id:
+                        apply_link = f"https://www.hirist.tech/j/{job_id}"
 
-                # Posted date (createdTime is Unix ms)
-                created_ms = item.get("createdTimeMs") or item.get("createdTime")
-                posted_date: date | None = None
-                if created_ms:
-                    try:
-                        posted_date = datetime.fromtimestamp(
-                            int(created_ms) / 1000, tz=timezone.utc
-                        ).date()
-                    except Exception:
-                        pass
+                # Posted date (createdTimeMs is Unix ms; createdTime may be s)
+                # createdTime may be seconds or ms depending on the field —
+                # parse_epoch decides by magnitude (known_edge_cases: V-13).
+                posted_date: date | None = parse_epoch(
+                    item.get("createdTimeMs") or item.get("createdTime")
+                )
 
                 if title and company and apply_link:
                     jobs.append(

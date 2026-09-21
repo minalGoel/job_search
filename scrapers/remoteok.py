@@ -8,6 +8,8 @@ import structlog
 
 from models.job import Job
 from scrapers.base import BaseScraper
+from services.location_filter import is_acceptable_location, explain as explain_location
+from services.title_filter import is_relevant_title, explain_title
 
 log = structlog.get_logger(__name__)
 
@@ -17,6 +19,7 @@ class RemoteOKScraper(BaseScraper):
 
     name: str = "remoteok"
     requires_login: bool = False
+    uses_browser: bool = False
 
     async def scrape(self) -> list[Job]:
         api_url = "https://remoteok.com/api"
@@ -35,20 +38,22 @@ class RemoteOKScraper(BaseScraper):
         listings = data[1:] if isinstance(data, list) and len(data) > 1 else data
 
         jobs: list[Job] = []
-        pm_keywords = {"product manager", "product management", "senior pm",
-                        "head of product", "director product", "vp product"}
 
         for item in listings:
             try:
                 position = item.get("position", "")
-                if not any(kw in position.lower() for kw in pm_keywords):
+                # Title relevance is config-driven (services/title_filter.py),
+                # never a per-scraper keyword list.
+                if not is_relevant_title(position):
+                    self._log.debug("item.title_rejected", title=position, reason=explain_title(position))
                     continue
 
                 company = item.get("company", "")
                 location = item.get("location", "Remote")
                 salary_min = item.get("salary_min")
                 salary_max = item.get("salary_max")
-                salary = f"${salary_min} - ${salary_max}" if salary_min is not None and salary_max is not None else None
+                # 0/None means "not disclosed" — never emit "$0 - $0".
+                salary = f"${salary_min} - ${salary_max}" if salary_min and salary_max else None
 
                 tags = item.get("tags", [])
                 if isinstance(tags, list):
@@ -78,7 +83,6 @@ class RemoteOKScraper(BaseScraper):
                 if position and company:
                     final_location = location.strip() if location else "Remote"
                     # Reject region-restricted remotes that don't include India
-                    from services.location_filter import is_acceptable_location, explain as explain_location
                     if not is_acceptable_location(final_location):
                         self._log.debug("remoteok.filtered_location",
                                         title=position, company=company,

@@ -23,6 +23,13 @@ app = typer.Typer(help="Job Search Aggregator — scrape PM roles across 9+ plat
 settings = Settings()
 params = SearchParams()
 
+# Title filtering is config-driven (services/title_filter.py); bind the
+# process-wide SearchParams once so every consumer (pipeline gate, insert_job,
+# scrapers) evaluates the same rules.
+from services import title_filter as _title_filter  # noqa: E402
+
+_title_filter.configure(params)
+
 
 def _configure_logging() -> None:
     structlog.configure(
@@ -45,41 +52,60 @@ async def _run_all(platforms: list[str] | None = None) -> None:
     from services.exporter import export_csv, export_excel
     from services.notifier import send_new_jobs_alert
     from services.location_filter import is_acceptable_location, explain as explain_location
+    from services.preflight import SKIP_PREFIX, needs_browser, partition
+    from services.title_filter import is_relevant_title, explain_title
 
     run_start = datetime.now()
     db = JobDB()
     try:
         target_platforms = platforms or list(SCRAPER_REGISTRY.keys())
         errors: dict[str, str] = {}
+        skipped: dict[str, str] = {}
         all_new_jobs: list[Job] = []
 
-        async with BrowserManager() as bm:
-            # Run all scrapers concurrently
-            tasks = {}
-            for name in target_platforms:
-                if name not in SCRAPER_REGISTRY:
-                    typer.echo(f"Unknown platform: {name}", err=True)
-                    continue
-                scraper_cls = SCRAPER_REGISTRY[name]
-                scraper = scraper_cls(bm, params)
-                tasks[name] = asyncio.create_task(scraper._safe_scrape())
+        # Pre-flight: never instantiate a scraper whose configuration is
+        # incomplete (login-gated without cookies, aggregator without key).
+        runnable, skipped, unknown = partition(
+            target_platforms, SCRAPER_REGISTRY, settings, settings.COOKIES_DIR
+        )
+        for name in unknown:
+            typer.echo(f"Unknown platform: {name}", err=True)
+        for name, note in skipped.items():
+            log.info("scraper.skipped", platform=name, reason=note[len(SKIP_PREFIX):])
+            typer.echo(f"  {name}: SKIPPED — {note[len(SKIP_PREFIX):]}")
 
+        async def _scrape_with(bm) -> None:  # noqa: ANN001
+            tasks = {
+                name: asyncio.create_task(SCRAPER_REGISTRY[name](bm, params, settings)._safe_scrape())
+                for name in runnable
+            }
             for name, task in tasks.items():
                 try:
                     jobs, scrape_error = await task
+                    if scrape_error and scrape_error.startswith(SKIP_PREFIX):
+                        skipped[name] = scrape_error
+                        typer.echo(f"  {name}: SKIPPED — {scrape_error[len(SKIP_PREFIX):]}")
+                        continue
                     if scrape_error:
                         errors[name] = scrape_error
                         typer.echo(f"  {name}: ERROR — {scrape_error}", err=True)
                         # Still process any jobs that came back before the failure
                     if jobs:
                         inserted_jobs: list[Job] = []
-                        skipped = 0
+                        existing = 0
+                        title_rejected = 0
                         location_rejected = 0
                         for job in jobs:
-                            # Pipeline-level location gate: defense in depth.
-                            # Individual scrapers already filter, but this catches
-                            # anything that slipped through (e.g. Naukri returning
-                            # a Mumbai job in a Delhi search, LinkedIn cross-border).
+                            # Pipeline-level gates: defense in depth. Scrapers
+                            # already filter, but this catches anything that
+                            # slipped through. Title first (cheap), then location.
+                            if not is_relevant_title(job.title):
+                                title_rejected += 1
+                                log.debug("pipeline.title_rejected",
+                                          platform=name, title=job.title,
+                                          company=job.company,
+                                          reason=explain_title(job.title))
+                                continue
                             if not is_acceptable_location(job.location):
                                 location_rejected += 1
                                 log.debug("pipeline.location_rejected",
@@ -92,11 +118,14 @@ async def _run_all(platforms: list[str] | None = None) -> None:
                             if db.insert_job(job):
                                 inserted_jobs.append(job)
                             else:
-                                skipped += 1
+                                existing += 1
 
                         all_new_jobs.extend(inserted_jobs)
+                        title_note = f", {title_rejected} wrong-title" if title_rejected else ""
                         loc_note = f", {location_rejected} wrong-location" if location_rejected else ""
-                        typer.echo(f"  {name}: {len(inserted_jobs)} new, {skipped} existing{loc_note}")
+                        typer.echo(
+                            f"  {name}: {len(inserted_jobs)} new, {existing} existing{title_note}{loc_note}"
+                        )
                     elif not scrape_error:
                         typer.echo(f"  {name}: 0 results")
                 except Exception as e:
@@ -104,6 +133,13 @@ async def _run_all(platforms: list[str] | None = None) -> None:
                     # fall through here if the task wrapper itself crashes.
                     errors[name] = f"{type(e).__name__}: {e}"
                     typer.echo(f"  {name}: ERROR — {e}", err=True)
+
+        # Only launch Chromium when a browser-based scraper is actually running.
+        if needs_browser(SCRAPER_REGISTRY[n] for n in runnable):
+            async with BrowserManager() as bm:
+                await _scrape_with(bm)
+        elif runnable:
+            await _scrape_with(None)
 
         # Dedup across platforms
         dup_count = mark_cross_platform_duplicates(all_new_jobs, db)
@@ -116,8 +152,9 @@ async def _run_all(platforms: list[str] | None = None) -> None:
         csv_path = export_csv(new_jobs_dicts, settings.OUTPUT_DIR)
         export_excel(all_jobs, new_jobs_dicts, settings.OUTPUT_DIR)
 
-        # Save run metadata
-        db.save_run(target_platforms, len(all_new_jobs), dup_count, errors)
+        # Save run metadata. Skips are stored alongside errors with the
+        # "skipped: " prefix so consumers can tell them apart (no schema change).
+        db.save_run(target_platforms, len(all_new_jobs), dup_count, {**errors, **skipped})
 
         # Notify
         if new_jobs_dicts:
@@ -125,7 +162,7 @@ async def _run_all(platforms: list[str] | None = None) -> None:
 
         typer.echo(
             f"\nDone: {len(all_new_jobs)} new jobs, {dup_count} cross-platform duplicates, "
-            f"{len(errors)} platform errors."
+            f"{len(errors)} platform errors, {len(skipped)} skipped."
         )
     finally:
         db.close()
@@ -186,10 +223,12 @@ def export() -> None:
 
 @app.command()
 def status() -> None:
-    """Show last run summary and cookie health."""
+    """Show last run summary, cookie health, and API-key readiness."""
     _configure_logging()
     from storage.db import JobDB
-    from services.cookie_manager import has_cookies, LOGIN_URLS
+    from services.cookie_manager import LOGIN_URLS
+    from services.preflight import has_cookies, split_run_notes
+    from scrapers import SCRAPER_REGISTRY
 
     db = JobDB()
     last_run = db.get_last_run()
@@ -199,15 +238,38 @@ def status() -> None:
         typer.echo(f"Last run: {last_run['timestamp']}")
         typer.echo(f"  New: {last_run['new_count']}, Duplicates: {last_run['duplicate_count']}")
         typer.echo(f"  Platforms: {', '.join(last_run['platforms_scraped'])}")
-        if last_run["errors"]:
-            typer.echo(f"  Errors: {last_run['errors']}")
+        real_errors, skipped = split_run_notes(last_run["errors"])
+        if real_errors:
+            typer.echo("  Errors:")
+            for name, note in real_errors.items():
+                typer.echo(f"    {name}: {note}")
+        if skipped:
+            typer.echo("  Skipped (needs login / API key):")
+            for name, note in skipped.items():
+                typer.echo(f"    {name}: {note}")
     else:
         typer.echo("No runs recorded yet.")
 
+    # Every Playwright scraper loads cookies/<platform>.json when present, but
+    # only requires_login scrapers are blocked without it.
     typer.echo("\nCookie status:")
     for p in LOGIN_URLS:
-        status = "OK" if has_cookies(p, settings.COOKIES_DIR) else "MISSING"
-        typer.echo(f"  {p}: {status}")
+        cls = SCRAPER_REGISTRY.get(p)
+        required = bool(cls and cls.requires_login)
+        if has_cookies(p, settings.COOKIES_DIR):
+            state = "OK"
+        elif required:
+            state = "needs login"
+        else:
+            state = "optional (not set)"
+        typer.echo(f"  {p}: {state}")
+
+    keyed = [(n, c) for n, c in SCRAPER_REGISTRY.items() if c.required_settings]
+    if keyed:
+        typer.echo("\nAPI keys:")
+        for name, cls in keyed:
+            missing = [k for k in cls.required_settings if not getattr(settings, k, "")]
+            typer.echo(f"  {name}: {'set' if not missing else 'missing (' + ', '.join(missing) + ')'}")
 
 
 @app.command()
@@ -281,39 +343,169 @@ async def _run_vc_jobs() -> None:
         typer.echo("No PM roles found on VC portals.")
 
 
-@app.command()
-def mnc_jobs() -> None:
-    """Scrape US MNC career pages for PM roles in Delhi NCR."""
+@app.command(name="mnc-jobs")
+def mnc_jobs(
+    only: Optional[str] = typer.Option(None, "--only", "-o", help="Comma-separated company names (slug/substring match)"),
+    ats: Optional[str] = typer.Option(None, "--ats", help="Only companies on this ATS (workday, greenhouse, html, ...)"),
+    dry_run: bool = typer.Option(False, "--dry-run", help="Fetch + filter, print the per-company table, but do not write to the DB"),
+    cap: Optional[int] = typer.Option(None, "--cap", help="Override MNC_MAX_POSTINGS for this run"),
+) -> None:
+    """Scrape MNC careers portals (full listing, filtered locally) for target roles in Delhi NCR."""
     _configure_logging()
-    asyncio.run(_run_mnc_jobs())
+    only_list = [x.strip() for x in only.split(",")] if only else None
+    asyncio.run(_run_mnc_jobs(only=only_list, ats=ats, dry_run=dry_run, cap=cap))
 
 
-async def _run_mnc_jobs() -> None:
+def _print_mnc_table(results) -> None:  # noqa: ANN001
+    typer.echo(f"\n  {'company':28s} {'ats':15s} {'lane':4s} {'status':6s} {'fetched/total':14s} {'cap':3s} {'match':5s} error")
+    typer.echo("  " + "-" * 110)
+    for r in results:
+        total = "?" if r.total_reported is None else str(r.total_reported)
+        typer.echo(
+            f"  {r.name[:28]:28s} {r.ats[:15]:15s} {r.lane:4s} {r.status:6s} "
+            f"{(str(r.fetched) + '/' + total)[:14]:14s} {('Y' if r.cap_hit else '-'):3s} {r.matched:5d} {r.error[:60]}"
+        )
+    ok = sum(r.status == "ok" for r in results)
+    empty = sum(r.status == "empty" for r in results)
+    failed = sum(r.status == "failed" for r in results)
+    typer.echo(f"\n  {len(results)} companies: {ok} ok, {empty} empty, {failed} failed; "
+               f"{sum(r.matched for r in results)} matching roles")
+
+
+async def _run_mnc_jobs(
+    only: Optional[list[str]] = None,
+    ats: Optional[str] = None,
+    dry_run: bool = False,
+    cap: Optional[int] = None,
+) -> None:
     from browser.context import BrowserManager
     from storage.db import JobDB
-    from mnc_careers.scraper import MNCCareerScraper
+    from mnc_careers.discovery import CSV_ALIASES
+    from mnc_careers.scraper import MNCCareerScraper, select_targets
+    from mnc_careers.registry import MNC_REGISTRY
+    from mnc_careers.ats import FETCHERS
+    from mnc_careers.ats.detect import SHAPE_DETECTED
+    from services.dedup import mark_cross_platform_duplicates
+    from services.exporter import export_csv
     from services.location_filter import is_acceptable_location
 
-    typer.echo("Scanning US MNC career pages...\n")
+    typer.echo("Scanning MNC careers portals (full listing → local title/location filter)...\n")
 
-    async with BrowserManager() as bm:
-        scraper = MNCCareerScraper(bm)
-        jobs = await scraper.scrape_all()
+    targets = select_targets(MNC_REGISTRY, only=only, ats=ats, aliases=CSV_ALIASES)
+    # Browser needed for HTML-lane entries and for heuristically detected ATSs
+    # (phenom/radancy/avature) that may be rerouted to the HTML lane at runtime.
+    needs_browser = any(m.ats_type not in FETCHERS or (m.ats_type in SHAPE_DETECTED and not m.api_type) for m in targets)
+    if needs_browser:
+        async with BrowserManager() as bm:
+            scraper = MNCCareerScraper(bm, settings)
+            jobs, results = await scraper.scrape_all(only=only, ats=ats, cap=cap, aliases=CSV_ALIASES)
+    else:
+        scraper = MNCCareerScraper(None, settings)
+        jobs, results = await scraper.scrape_all(only=only, ats=ats, cap=cap, aliases=CSV_ALIASES)
 
+    _print_mnc_table(results)
+
+    # Pipeline-level location gate: defense in depth (filter.py already applied it).
     accepted = [j for j in jobs if is_acceptable_location(j.location)]
     rejected = len(jobs) - len(accepted)
     if rejected:
-        typer.echo(f"  Location filter: rejected {rejected} out-of-scope jobs.")
+        typer.echo(f"  Location gate: rejected {rejected} out-of-scope jobs.")
 
-    if accepted:
-        db = JobDB()
-        try:
-            inserted, skipped = db.insert_jobs(accepted)
-            typer.echo(f"\nMNC careers: {inserted} new, {skipped} existing")
-        finally:
-            db.close()
-    else:
-        typer.echo("No PM roles found on MNC career pages.")
+    if dry_run:
+        typer.echo(f"\n  DRY RUN — {len(accepted)} jobs would be inserted; nothing written.")
+        return
+
+    db = JobDB()
+    try:
+        inserted: list[Job] = []
+        existing = 0
+        per_company: dict[str, int] = {}
+        for job in accepted:
+            if db.insert_job(job):
+                inserted.append(job)
+                per_company[job.company] = per_company.get(job.company, 0) + 1
+            else:
+                existing += 1
+        dup_count = mark_cross_platform_duplicates(inserted, db)
+        batch_id = datetime.now().isoformat(timespec="seconds")
+        rows = []
+        for r in results:
+            row = r.as_row()
+            row["inserted"] = per_company.get(r.name, 0)
+            rows.append(row)
+        db.save_source_runs("mnc", rows, batch_id)
+        if inserted:
+            settings.OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+            export_csv([j.model_dump() for j in inserted], settings.OUTPUT_DIR)
+        typer.echo(f"\nMNC careers: {len(inserted)} new, {existing} existing, {dup_count} cross-platform duplicates (batch {batch_id})")
+    finally:
+        db.close()
+
+
+@app.command(name="mnc-discover")
+def mnc_discover(
+    csv_path: Optional[Path] = typer.Option(None, "--csv", help="Input CSV (default mnc_careers/data/mnc_input.csv)"),
+    only: Optional[str] = typer.Option(None, "--only", "-o", help="Comma-separated company names to (re)discover"),
+    dry_run: bool = typer.Option(False, "--dry-run", help="Classify + list candidates only (no network)"),
+    browser: bool = typer.Option(False, "--browser", help="Also verify HTML-lane candidates with Playwright (slow)"),
+    concurrency: int = typer.Option(8, "--concurrency", help="Companies probed concurrently"),
+    out: Optional[Path] = typer.Option(None, "--out", help="Output directory (default output/)"),
+    repair: bool = typer.Option(False, "--repair", help="Re-verify EXISTING registry entries (typed ATS) and propose URL fixes"),
+    ats: Optional[str] = typer.Option(None, "--ats", help="With --repair: only entries on this ATS"),
+    apply: bool = typer.Option(False, "--apply", help="With --repair: write verified typed-ATS fixes into mnc_careers/registry.py"),
+    apply_fallbacks: bool = typer.Option(False, "--apply-fallbacks", help="With --repair --apply: also write hand-researched HTML-lane URLs from discovery_overrides.csv"),
+) -> None:
+    """Discover + verify careers listing endpoints for companies in the MNC input CSV.
+
+    Writes output/mnc_discovery_report.md, mnc_discovery.json and paste-ready
+    mnc_discovery_entries.py. Nothing is written to the registry automatically
+    (except --repair --apply, which patches URLs of existing entries in place).
+    """
+    _configure_logging()
+    from mnc_careers.discovery import INPUT_CSV, emit, run_discovery
+
+    only_list = [x.strip() for x in only.split(",")] if only else None
+
+    if repair:
+        from mnc_careers.discovery import apply_repairs, emit_repair, run_repair
+        from mnc_careers import registry as _registry_mod
+
+        results = asyncio.run(run_repair(only=only_list, ats=ats, concurrency=concurrency))
+        for r in results:
+            if r.status != "ok":
+                typer.echo(f"    {r.status:13s} {r.name[:30]:30s} {r.ats:14s} {r.new_url[:70] or r.error[:70]}")
+        counts = {s: sum(r.status == s for r in results) for s in ("ok", "repaired", "fallback_html", "unresolved")}
+        typer.echo("\n  " + ", ".join(f"{k}: {v}" for k, v in counts.items()))
+        report = emit_repair(results, out or settings.OUTPUT_DIR)
+        typer.echo(f"  wrote {report}")
+        if apply:
+            n = apply_repairs(results, Path(_registry_mod.__file__), include_fallback=apply_fallbacks)
+            typer.echo(f"  applied {n} registry patches → {_registry_mod.__file__}")
+        return
+    results = asyncio.run(
+        run_discovery(
+            input_csv=csv_path or INPUT_CSV, only=only_list, dry_run=dry_run,
+            use_browser=browser, concurrency=concurrency, settings=settings,
+        )
+    )
+    new = [r for r in results if r.classification == "new"]
+    typer.echo(f"\n  {len(results)} companies: "
+               f"{sum(r.classification == 'exact' for r in results)} exact, "
+               f"{sum(r.classification == 'alias' for r in results)} alias, {len(new)} new")
+    if dry_run:
+        for r in new:
+            typer.echo(f"    NEW {r.company.name:40s} {r.company.hq_country:28s} candidates={len(r.candidates)}"
+                       + (f"  possible_alias={r.possible_alias}" if r.possible_alias else ""))
+        return
+    resolved = [r for r in new if r.resolved]
+    typer.echo(f"  resolved {len(resolved)} / unresolved {len(new) - len(resolved)}")
+    for r in new:
+        v = r.verification
+        mark = "OK " if r.resolved else "-- "
+        detail = f"{v.ats:14s} {v.listing_url[:70]}" if (v and r.resolved) else (v.error[:80] if v else "no candidates")
+        typer.echo(f"    {mark}{r.company.name[:34]:34s} {detail}")
+    paths = emit(results, out or settings.OUTPUT_DIR)
+    typer.echo("\n  wrote " + ", ".join(str(p) for p in paths.values()))
 
 
 @app.command(name="run-all")
@@ -334,7 +526,7 @@ async def _run_everything() -> None:
     typer.echo("\n[2/4] VC Portfolio Job Portals")
     await _run_vc_jobs()
 
-    typer.echo("\n[3/4] US MNC Career Pages")
+    typer.echo("\n[3/4] MNC Careers Portals")
     await _run_mnc_jobs()
 
     typer.echo("\n[4/4] Funding Scanner")
@@ -844,7 +1036,7 @@ def full_run(
     Full end-to-end pipeline:
       1. Scrape all 14 job platforms
       2. VC portfolio job portals        (--skip-vc to skip)
-      3. US MNC career pages             (--skip-mnc to skip)
+      3. MNC careers portals             (--skip-mnc to skip)
       4. Funding news scan               (--skip-funding to skip)
       5. Score & rank all jobs
       6. Today's action queue
@@ -897,7 +1089,7 @@ async def _full_run_async(
 
     # ── STEP 3: MNC careers ────────────────────────────────────────
     if not skip_mnc:
-        _banner("[3/8]", "US MNC career pages")
+        _banner("[3/8]", "MNC careers portals")
         t = time.time()
         await _run_mnc_jobs()
         typer.echo(f"  ✓ MNC careers done  ({_elapsed(t)})")
@@ -1080,27 +1272,24 @@ def purge_titles(
     yes: bool = typer.Option(False, "--yes", "-y", help="Skip confirmation"),
 ) -> None:
     """
-    Remove jobs whose title does not contain both 'product' and 'manager'.
+    Remove jobs whose title fails the configured title filter
+    (config/search_params.py → services/title_filter.py).
 
     Jobs with existing application tracker rows are always preserved.
-    Run this once after deploying the title filter to clean up historical data.
+    Run this after changing title keywords/exclusions to clean up historical data.
     """
     from storage.db import JobDB
     _configure_logging()
 
     db = JobDB()
     try:
-        to_delete = db.conn.execute(
-            """SELECT COUNT(*) FROM jobs
-               WHERE (LOWER(title) NOT LIKE '%product%' OR LOWER(title) NOT LIKE '%manager%')
-               AND id NOT IN (SELECT job_id FROM applications WHERE job_id IS NOT NULL)"""
-        ).fetchone()[0]
+        to_delete = len(db.find_irrelevant_title_ids())
 
         if to_delete == 0:
             typer.echo("  No irrelevant titles found — DB is already clean.")
             return
 
-        typer.echo(f"\n  Found {to_delete} jobs with titles that don't match 'product' + 'manager'.")
+        typer.echo(f"\n  Found {to_delete} jobs with titles that fail the title filter.")
         typer.echo("  Jobs with application tracker rows will be preserved.\n")
 
         if not yes:
@@ -1110,6 +1299,42 @@ def purge_titles(
                 return
 
         deleted = db.purge_irrelevant_titles()
+        typer.echo(f"\n  ✓ Deleted {deleted} jobs. Run `python main.py recommend --rescore` to refresh scores.\n")
+    finally:
+        db.close()
+
+
+@app.command(name="purge-filters")
+def purge_filters(
+    yes: bool = typer.Option(False, "--yes", "-y", help="Skip confirmation"),
+) -> None:
+    """
+    Re-evaluate stored jobs against the CURRENT title and location filters and
+    delete the ones that no longer pass (guidelines §14: audit before purging).
+
+    Jobs with application tracker rows are always preserved. Run after changing
+    config/search_params.py or services/location_filter.py.
+    """
+    from storage.db import JobDB
+    _configure_logging()
+
+    db = JobDB()
+    try:
+        title_ids = db.find_irrelevant_title_ids()
+        loc_ids = [i for i in db.find_irrelevant_location_ids() if i not in set(title_ids)]
+        total = db.conn.execute("SELECT COUNT(*) FROM jobs").fetchone()[0]
+        n = len(title_ids) + len(loc_ids)
+        if n == 0:
+            typer.echo("  All stored jobs pass the current filters — nothing to purge.")
+            return
+        pct = 100 * n / max(1, total)
+        typer.echo(f"\n  {n}/{total} jobs ({pct:.1f}%) fail the current filters: {len(title_ids)} title, {len(loc_ids)} location.")
+        if pct > 30:
+            typer.echo("  ⚠ More than 30% would be removed — check the filter before purging (guidelines §14).")
+        if not yes and not typer.confirm("  Delete them?"):
+            typer.echo("  Aborted.")
+            return
+        deleted = db.delete_jobs(title_ids + loc_ids)
         typer.echo(f"\n  ✓ Deleted {deleted} jobs. Run `python main.py recommend --rescore` to refresh scores.\n")
     finally:
         db.close()

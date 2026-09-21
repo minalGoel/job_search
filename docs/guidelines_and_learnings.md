@@ -17,6 +17,9 @@ Whenever the same concept appears in two places, one will silently drift from th
 | Application status vocabulary | `storage/db.APPLICATION_STATUSES` | CLI `apply-status`, API `/jobs/:id/status`, `/applications/:id/status` |
 | Application ID generation | `storage/db.application_id_for()` | CLI `shortlist`, API `shortlist_job`, `update_job_status` |
 | "Counts as applied" statuses | `storage/db.STATUSES_COUNTING_AS_APPLIED` | API status updates, `/api/today` follow-up detector |
+| Title relevance (keywords, exclusions, fuzzy) | `services/title_filter.py` ← `config/search_params.py` | `storage/db.insert_job`, `main.py` pipeline gate, remoteok/ycombinator/vc_portals/mnc_careers, `purge-titles` |
+| "Can this scraper run?" (cookies, API keys) | `services/preflight.py` | `main._run_all`, `status`, `/api/scrapers`, `/api/runs` |
+| ATS detection / URL parsing | `mnc_careers/ats/detect.py` | MNC scraper lanes, `mnc-discover`, `--repair` |
 
 **Rule:** If you catch yourself writing the same allowlist, normalizer, or enum in a second file, stop and extract it first.
 
@@ -168,13 +171,15 @@ When `CLAUDE.md` or docstrings say "this function strips legal suffixes" and the
 
 ---
 
-## 12. Scraping: per-job validation > search URL filters
+## 12. Scraping: per-job validation > search URL filters — we own ALL filtering
 
 Portal search URLs (`?location=delhi`, `?q=product+manager`) are **hints** to the portal's ranker, not contracts. Every scraper must:
 1. Pull the configured query from `self.search_params.title_keywords[0]` (never hardcode)
 2. Fetch results pessimistically (assume the filter was ignored)
 3. Validate every result's `location`, `title`, `company` against the configured allowlist
 4. Reject with a reason log, don't default
+
+**Company careers portals go further (Sept 2026):** fetch the *full* listing (paginated, `MNC_MAX_POSTINGS` cap) and filter title + location locally via `services/title_filter` / `services/location_filter`. Server-side search is used only as a supplementary "net" when a portal has more postings than the cap (`SearchParams.server_net_keywords`). Changing what we look for — search strings, exclusions, fuzzy rules, location tokens — is a config change in one place, never a per-portal URL edit. Corollary: the `?q=` in a registry URL is stripped before the primary fetch.
 
 ---
 
@@ -300,3 +305,23 @@ def _balance_with_priority(curated, supplement, neg):
 ```
 
 **Corollary for `AMBIGUOUS_EXCLUSIONS`:** only include names that are genuinely ambiguous across the target classification (e.g. "singh" — used by Sikhs but also non-Indians). Do NOT add clearly non-Indian names (Spanish, East Asian, etc.) to the exclusion list — they belong in the non-Indian training set. A name in `AMBIGUOUS_EXCLUSIONS` is removed from BOTH sides, robbing the model of a useful negative example.
+
+---
+
+## 22. Config-gated scrapers skip, they don't fail
+
+A scraper that cannot run for a *configuration* reason — no saved cookies for a login-gated site, blank API key, key rejected with 401/403 — is not an error and must not paint a run red. Decide it before instantiation (`services/preflight.partition`), record it in `runs.errors` with the `"skipped: "` prefix so no schema changes, and split it out everywhere it is displayed (`split_run_notes`). Inside a scraper, raise `ScraperSkipped` rather than returning `[]` or raising a generic exception. Only launch Chromium when a runnable scraper needs it (`uses_browser`).
+
+---
+
+## 23. Per-company diagnostics for many-source modules
+
+When one command fans out to hundreds of sources (MNC careers: ~350 portals), "N new jobs" tells you nothing about which portals rotted. Record one row per source per batch (`source_runs`: status ok/empty/failed, fetched, total, cap_hit, matched, error, duration) — separate from `runs`, whose latest row is "the last run" for the CLI and dashboard and must not be hijacked by a per-company batch. Expose the latest row per company through the API and a filterable dashboard screen. Verify every source URL at *discovery* time by running the real fetcher (`mnc-discover`), never by trusting a hand-typed URL: 42 of 51 Workday URLs in the registry were dead for months without anyone noticing.
+
+## 24. Shape-detected integrations must be able to say "not me" on the first page
+
+When an integration is picked from a URL shape (`/search-jobs` → Radancy, `/SearchJobs` → Avature, `/search-results` → Phenom), the detector will be wrong for a steady trickle of sites: DirectEmployers `.jobs` microsites, redirected domains, SuccessFactors tenants on `/search-jobs/…` paths, Akamai walls. Don't make those hard failures. The typed fetcher checks its very first, unfiltered page and raises a dedicated exception (`NotThisATS`, a `FetchError` subclass) when the site does not behave like that ATS — endpoint 4xx/5xx, wrong content type, no result markup — and the orchestrator reroutes the company to the generic lane inside the same run. Genuine mid-pagination or keyword-net failures keep raising the plain error so a real outage is still reported as `failed`. Rule of thumb: *detection is a hint, the first page is the proof*. (Applied Sept 2026 to Phenom, Radancy and Avature: 8 `failed` rows became `ok`/`empty` HTML-lane rows without touching the registry.)
+
+## 25. When a textual patcher edits a record, anchor on the field, not the value
+
+`apply_repairs` rewrote registry entries by replacing the first occurrence of the old URL string. Discovered entries carry the same URL in `careers_url` and `pm_search_url`, so the marketing link was fixed and the dead listing URL survived (Mace, MSC) — silently, because the patch count still said "applied". Anchor textual edits on `field=value` and fall back to value-only matching solely for positional records; then assert the *intended* field changed (`mnc-jobs --only X --dry-run` after `--apply`).

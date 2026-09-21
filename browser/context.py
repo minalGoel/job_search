@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import random
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -34,6 +35,11 @@ class BrowserManager:
         self._playwright: Playwright | None = None
         self._browser: Browser | None = None
         self._contexts: dict[str, BrowserContext] = {}
+        # Serialises context creation: get_context() is check-then-create
+        # across an await, so concurrent callers for the same platform would
+        # otherwise each spawn a context and only the last one gets cached
+        # (and closed) — see known_edge_cases.md.
+        self._context_lock: asyncio.Lock | None = None
 
     # ------------------------------------------------------------------
     # Lifecycle
@@ -108,6 +114,19 @@ class BrowserManager:
         if self._browser is None:
             raise RuntimeError("BrowserManager has not been started — call start() first")
 
+        if self._context_lock is None:
+            self._context_lock = asyncio.Lock()
+        async with self._context_lock:
+            # Re-check inside the lock: another caller may have created it
+            # while we were waiting.
+            if platform in self._contexts:
+                return self._contexts[platform]
+            context = await self._create_context(platform, cookies_dir)
+            self._contexts[platform] = context
+            return context
+
+    async def _create_context(self, platform: str, cookies_dir: Path) -> BrowserContext:
+        assert self._browser is not None
         user_agent = random.choice(_USER_AGENTS)
         storage_path = cookies_dir / f"{platform}.json"
 
@@ -139,7 +158,6 @@ class BrowserManager:
             except Exception:
                 log.exception("stealth.apply_failed", platform=platform)
 
-        self._contexts[platform] = context
         log.info("browser.context.created", platform=platform, user_agent=user_agent)
         return context
 

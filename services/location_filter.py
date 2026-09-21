@@ -21,10 +21,13 @@ NCR_TOKENS = (
     "new delhi", "newdelhi",
     "delhi",
     "ncr",
-    "gurugram", "gurgaon",
-    "noida",
+    "gurugram", "gurgaon", "gurgoan", "gurugaon", "gurgram", "ggn",  # Gurgaon + common misspellings/abbrev.
+    "cyber city", "cybercity", "udyog vihar", "sohna road", "golf course road", "manesar",  # Gurgaon localities
+    "noida", "greater noida",
     "faridabad", "ghaziabad",  # NCR peripheral cities
 )
+
+HYBRID_TOKENS = ("hybrid", "flexible location", "flex location")
 
 REMOTE_TOKENS = (
     "remote",
@@ -122,6 +125,19 @@ NON_INDIA_CITIES = (
 _WHITESPACE_RE = re.compile(r"\s+")
 _INDIA_WORD_RE = re.compile(r"\bindia\b")
 
+# Whole-word country names / ISO-ish codes that mark a role as outside India even
+# when phrased as "remote" ("Remote, US", "Ontario, CAN - Remote", "Remote - Estonia").
+# Codes are limited to ones that don't collide with ordinary words in addresses.
+_NON_INDIA_TOKEN_RE = re.compile(
+    r"\b(?:"
+    r"us|usa|u\.s\.|u\.s\.a\.|uk|gb|can|au|nz|eu|sg|jp|hk|ae|za|br|mx|pl|ie|de|fr|nl|ch|se|no|dk|fi|ee|cz|at|be|pt|"
+    r"estonia|poland|ireland|belgium|austria|czechia|czech republic|romania|portugal|hungary|greece|turkey|finland|"
+    r"latvia|lithuania|ukraine|serbia|croatia|slovakia|slovenia|bulgaria|egypt|nigeria|kenya|south africa|colombia|"
+    r"peru|chile|costa rica|taiwan|pakistan|bangladesh|sri lanka|nepal|qatar|kuwait|oman|bahrain|united arab emirates|"
+    r"hongkong|england|scotland|wales|americas|north america|latin america|europe|asia pacific|middle east"
+    r")\b"
+)
+
 
 def _normalize(loc: str) -> str:
     if not loc:
@@ -161,19 +177,18 @@ def is_acceptable_location(loc: str | None) -> bool:
     if _contains_any(norm, INDIA_NON_NCR_CITIES):
         return False
 
-    # Rule 6: explicit non-India city/country → reject
-    if _contains_any(norm, NON_INDIA_CITIES):
-        return False
-
-    # Rule 2/3: remote check
-    is_remote = _contains_any(norm, REMOTE_TOKENS)
-    if is_remote:
-        # Already filtered out non-NCR cities above, so this is safe.
+    # Rule 3: "India" named explicitly (country-level posting, or "Remote - India / US")
+    # → accept. Checked before the non-India lists so a role open to India AND
+    # other countries is not thrown away.
+    if _INDIA_WORD_RE.search(norm):
         return True
 
-    # Rule 3: "India" on its own (without a specific non-NCR city) — accept.
-    # This catches "India" as a country-level posting.
-    if _INDIA_WORD_RE.search(norm):
+    # Rule 6: explicit non-India city/country/code → reject
+    if _contains_any(norm, NON_INDIA_CITIES) or _NON_INDIA_TOKEN_RE.search(norm):
+        return False
+
+    # Rule 2: pure global remote (no country/city qualifier survived the checks above)
+    if _contains_any(norm, REMOTE_TOKENS):
         return True
 
     return False
@@ -192,7 +207,7 @@ def normalize_region(loc: str | None) -> str:
 
     if _contains_any(norm, NCR_TOKENS):
         return "delhi-ncr"
-    if _contains_any(norm, REMOTE_TOKENS) and not _contains_any(norm, NON_INDIA_CITIES):
+    if _contains_any(norm, REMOTE_TOKENS) and not _contains_any(norm, NON_INDIA_CITIES) and not _NON_INDIA_TOKEN_RE.search(norm):
         return "remote"
     if _contains_any(norm, INDIA_NON_NCR_CITIES):
         # Return the first matching Indian city
@@ -214,10 +229,35 @@ def explain(loc: str | None) -> str:
         return "NCR match"
     if _contains_any(norm, INDIA_NON_NCR_CITIES):
         return f"non-NCR India city: {loc!r}"
-    if _contains_any(norm, NON_INDIA_CITIES):
-        return f"non-India city/country: {loc!r}"
-    if _contains_any(norm, REMOTE_TOKENS):
-        return "pure remote"
     if _INDIA_WORD_RE.search(norm):
         return "India (country-level)"
+    if _contains_any(norm, NON_INDIA_CITIES):
+        return f"non-India city/country: {loc!r}"
+    m = _NON_INDIA_TOKEN_RE.search(norm)
+    if m:
+        return f"non-India country token {m.group(0)!r}: {loc!r}"
+    if _contains_any(norm, REMOTE_TOKENS):
+        return "pure remote"
     return f"unrecognised: {loc!r}"
+
+
+def work_mode(loc: str | None, title: str | None = "", description: str | None = "") -> str:
+    """Derive remote | hybrid | onsite | unknown from location (+ title/description hints).
+
+    The user prefers remote/hybrid roles; scoring rewards them and the dashboard
+    filters on this value. Location text wins over description text.
+    """
+    norm_loc = _normalize(loc or "")
+    norm_title = _normalize(title or "")
+    head = _normalize((description or "")[:600])
+    if _contains_any(norm_loc, HYBRID_TOKENS) or _contains_any(norm_title, HYBRID_TOKENS):
+        return "hybrid"
+    if _contains_any(norm_loc, REMOTE_TOKENS) or _contains_any(norm_title, REMOTE_TOKENS):
+        return "remote"
+    if _contains_any(head, HYBRID_TOKENS):
+        return "hybrid"
+    if "fully remote" in head or "remote-first" in head or "remote first" in head or "100% remote" in head:
+        return "remote"
+    if _contains_any(norm_loc, NCR_TOKENS) or _contains_any(norm_loc, INDIA_NON_NCR_CITIES) or _contains_any(norm_loc, NON_INDIA_CITIES):
+        return "onsite"
+    return "unknown"

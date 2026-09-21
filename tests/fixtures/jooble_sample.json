@@ -1,0 +1,9 @@
+{
+  "totalCount": 4,
+  "jobs": [
+    {"title": "Product Manager", "location": "Gurgaon, Haryana", "snippet": "Lead the <b>product</b> team", "salary": "₹25L – ₹35L", "source": "naukri.com", "type": "Full-time", "link": "https://jooble.org/jdp/1234567890?ckey=product+manager&rgn=17&pos=3", "company": "Urban Company", "updated": "2026-09-15T00:00:00.0000000", "id": 1234567890},
+    {"title": "Product Manager", "location": "Mumbai, Maharashtra", "snippet": "", "salary": "", "source": "", "type": "", "link": "https://jooble.org/jdp/2?ckey=a", "company": "Tata", "updated": "2026-09-15T00:00:00.0000000", "id": 2},
+    {"title": "Project Manager", "location": "Noida, Uttar Pradesh", "snippet": "", "salary": "", "source": "", "type": "", "link": "https://jooble.org/jdp/3?ckey=a", "company": "HCL", "updated": "2026-09-15T00:00:00.0000000", "id": 3},
+    {"title": "Senior Product Manager", "location": "New Delhi, Delhi", "snippet": "", "salary": "", "source": "", "type": "", "link": "https://jooble.org/jdp/4?ckey=a", "company": "", "updated": "bad-date", "id": 4}
+  ]
+}

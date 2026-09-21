@@ -40,6 +40,14 @@ def _parse_relative_date(text: str) -> date | None:
     return None
 
 
+_CLOUDFLARE_MARKERS = ("cf-chl", "Just a moment", "Additional Verification Required", "cf-browser-verification")
+
+
+def _looks_like_cloudflare(html: str) -> bool:
+    head = html[:20_000]
+    return any(m in head for m in _CLOUDFLARE_MARKERS)
+
+
 class IndeedScraper(BaseScraper):
     name: str = "indeed"
     requires_login: bool = False
@@ -84,6 +92,12 @@ class IndeedScraper(BaseScraper):
                     await page.close()
                 except Exception:
                     pass
+
+        # Cloudflare interstitial: report it instead of a misleading
+        # "cards_found=0". Blocking is an accepted outcome for Indeed.
+        if _looks_like_cloudflare(html):
+            self._log.warning("page.cloudflare_challenge", page=page_num, url=url)
+            return []
 
         soup = BeautifulSoup(html, "html.parser")
         jobs: list[Job] = []

@@ -1,6 +1,6 @@
 # PM Job Search Aggregator
 
-An async Python CLI + web dashboard for aggregating Senior Product Manager roles across 14 job platforms, VC portfolios, MNC career sites, YC companies, and real-time funding signals. **Deduplicates listings, scores jobs with heuristic + company-quality + warmth + semantic signals, tracks applications, and automates outreach via Apollo + Gmail.**
+An async Python CLI + web dashboard for aggregating Senior Product Manager roles across 14 job platforms (11 boards + 3 API aggregators), VC portfolios, ~350 MNC careers portals, YC companies, and real-time funding signals. **Deduplicates listings, scores jobs with heuristic + company-quality + warmth + semantic signals, tracks applications, and automates outreach via Apollo + Gmail.**
 
 **Designed for:** PM candidates targeting Delhi NCR, 5–7 years experience, AI/Tech/SaaS/B2B roles.
 
@@ -8,16 +8,24 @@ An async Python CLI + web dashboard for aggregating Senior Product Manager roles
 
 ## Features
 
-### 🔍 Job Aggregation (14 Platforms)
+### 🔍 Job Aggregation (14 active platforms)
 
 Concurrent scrapers for:
-- **Job Boards**: LinkedIn, Naukri, Instahyre, Indeed, RemoteOK, We Work Remotely, Glassdoor, Weekday, IIMJobs, Cutshort, FoundIt, Hirist
-- **Startup Listings**: YCombinator, Wellfound
+- **Job Boards**: Naukri, IIMJobs, Hirist, Foundit, Indeed, LinkedIn (guest), RemoteOK, Instahyre*, Cutshort*, Weekday*
+- **API aggregators**: Adzuna, Jooble, Careerjet (free API keys — skipped until set in `.env`)
+- **Startup Listings**: YCombinator (Wellfound and Glassdoor are disabled — Cloudflare)
+
+\* login-gated: skipped cleanly until you run `python main.py login <platform>`.
+
+**All filtering is ours.** Every source is fetched broadly and then filtered in memory by `services/title_filter.py` (configurable keywords, exclusions and typo-tolerant fuzzy matching in `config/search_params.py`) and `services/location_filter.py`. Portal search parameters are only a volume pre-filter.
+
+- **Titles**: anything containing "product" is kept; the dashboard's *title category* filter (PM / Leadership / Owner / Marketing / Design / Analyst-Ops / Eng / Other) sorts them and scoring demotes the non-PM families.
+- **Locations**: a posting is kept if it mentions Delhi NCR — Gurgaon (any spelling), Noida, Delhi, Faridabad, Ghaziabad — or is remote/India-wide, even alongside other cities; it is dropped only when it names *other* locations exclusively. Remote and hybrid roles get a scoring bonus and a *work mode* filter.
 
 ### 💼 Supplementary Sources
 
 - **VC Portals**: Scrapes job pages from 30+ VC funds
-- **MNC Careers**: Scrapes career pages from 42+ multinational companies
+- **MNC Careers**: ~350 multinational careers portals via typed ATS fetchers (Workday, Greenhouse, Lever, SmartRecruiters, SuccessFactors classic + Unify, Phenom, Radancy, Oracle HCM, Avature, Amazon) plus a Playwright lane for the rest. Fetches each company's **full listing** and filters locally; per-company outcomes land in `source_runs` and the dashboard's *MNC Careers* screen. `python main.py mnc-discover` finds and verifies portals for new companies. The dashboard's **Companies** screen (`http://localhost:8000/#companies`) lists every registry company with website / LinkedIn / careers-portal links and what happened on the last extraction, so portals we can't scrape can be opened by hand.
 - **YC Startups Module**: Syncs YC directory, detects hiring signals, enriches founder/company data
 - **Funding Scanner**: Tracks recently funded companies from news sources (TechCrunch, Inc42, YC Batch pages)
 
@@ -112,7 +120,12 @@ job_search/
 │   ├── registry.py          # 30 VCFund dataclasses with portal URLs
 │   └── scraper.py
 ├── mnc_careers/             # MNC registry + scraper
-│   ├── registry.py          # 42 MNC dataclasses with career page URLs
+│   ├── registry.py          # ~350 MNC dataclasses (listing URL, ATS override, HQ country)
+│   ├── ats/                 # typed fetchers: workday, greenhouse, lever, smartrecruiters, successfactors(+unify), phenom, radancy, oracle_hcm, avature, amazon_jobs
+│   ├── html_generic.py      # Playwright lane (JSON interception, cards, pagination, consent dismissal)
+│   ├── filter.py            # postings → Jobs through the shared title/location filters
+│   ├── discovery.py         # mnc-discover: probe, verify, emit entries; --repair for dead URLs
+│   └── data/                # mnc_input.csv, discovery_overrides.csv
 │   └── scraper.py
 ├── yc_startups/             # Y Combinator integration
 │   ├── scraper.py           # Syncs YC batch directory
@@ -221,8 +234,15 @@ python main.py funding
 # Scrape VC portal job listings
 python main.py vc-jobs
 
-# Scrape MNC career page jobs
+# Scrape MNC careers portals (full run ≈ 15–40 min for ~350 companies)
 python main.py mnc-jobs
+python main.py mnc-jobs --only "SAP,Autodesk" --dry-run     # per-company table, nothing written
+python main.py mnc-jobs --ats workday --cap 500
+
+# Discover / verify careers portals for companies in mnc_careers/data/mnc_input.csv
+python main.py mnc-discover --dry-run          # classification + candidates, no network
+python main.py mnc-discover --browser          # probe + verify (Playwright for HTML-lane sites)
+python main.py mnc-discover --repair --ats workday --apply   # re-verify existing entries, patch dead URLs
 
 # All three above at once
 python main.py run-all
@@ -335,41 +355,46 @@ python main.py purge-jobs --before "2025-12-01"
 
 ### Environment Variables (`.env`)
 
+The authoritative list is `config/settings.py` (every field has a default; `.env` is loaded from the repo root regardless of CWD). Search titles/locations are **not** env vars — edit `config/search_params.py`.
+
 ```bash
-# ── Search Parameters ────────────────────────────────
-SEARCH_TITLES=Senior Product Manager, Product Manager, PM, Senior PM,Principal PM, Lead PM
-SEARCH_LOCATION=Delhi,NCR,Bangalore,Remote
-MIN_EXPERIENCE=5
-MAX_EXPERIENCE=10
-MIN_SALARY=4000000  # 40 LPA in paisa
-MAX_SALARY=8000000  # 80 LPA
-
-# ── API Keys ─────────────────────────────────────────
-APOLLO_API_KEY=your-apollo-key
-PROSPEO_API_KEY=your-prospeo-key
-
-# ── SMTP (email alerts) ──────────────────────────────
-SMTP_HOST=smtp.gmail.com
+# ── Email alerts (leave SMTP_HOST blank to disable) ──
+SMTP_HOST=
 SMTP_PORT=587
-SMTP_USER=your-email@gmail.com
-SMTP_PASSWORD=your-app-password
-SMTP_FROM=your-email@gmail.com
-ALERT_EMAIL_TO=recipient@example.com
+SMTP_USER=
+SMTP_PASSWORD=
+ALERT_RECIPIENTS=
 
-# ── Gmail OAuth (outreach sending) ───────────────────
-GMAIL_CREDENTIALS_PATH=credentials/gmail_credentials.json
-GMAIL_TOKEN_PATH=credentials/gmail_token.json
-
-# ── Scheduling ───────────────────────────────────────
-SCHEDULER_CRON_HOUR_1=09  # 9 AM IST
-SCHEDULER_CRON_HOUR_2=16  # 4 PM IST
-SCHEDULER_CRON_MINUTE=00
+# ── Schedule ─────────────────────────────────────────
+SCHEDULE_TIMES=09:00,16:00        # IST, comma-separated
+POLL_INTERVAL_MINUTES=0
 LOG_LEVEL=INFO
 
-# ── Outreach ─────────────────────────────────────────
+# ── Job aggregator APIs (free keys; scraper skipped while blank) ──
+ADZUNA_APP_ID=                    # https://developer.adzuna.com/
+ADZUNA_APP_KEY=
+JOOBLE_API_KEY=                   # https://jooble.org/api/about
+CAREERJET_AFFID=                  # https://www.careerjet.com/partners/api/
+
+# ── MNC careers (defaults shown) ─────────────────────
+MNC_MAX_POSTINGS=3000             # full-listing cap per company; keyword "net" beyond it
+MNC_API_CONCURRENCY=12
+MNC_HTML_CONCURRENCY=5
+MNC_COMPANY_TIMEOUT=420
+
+# ── Outreach: Apollo / Prospeo / Gmail OAuth ─────────
+APOLLO_API_KEY=
 APOLLO_RATE_LIMIT_PER_MINUTE=10
-REVIEW_PORT=8899
+PROSPEO_API_KEY=
+GMAIL_CREDENTIALS_PATH=credentials/gmail_credentials.json
+GMAIL_TOKEN_PATH=credentials/gmail_token.json
+OUTREACH_DAILY_LIMIT=25
+OUTREACH_SENDER_NAME=Your Name
 ```
+
+### Title & location filtering (`config/search_params.py`)
+
+`title_keywords` / `titles` (accept phrases), `title_exclude_phrases`, `title_synonyms`, `title_token_fuzz_threshold` and `server_net_keywords` drive `services/title_filter.py`; NCR/remote tokens live in `services/location_filter.py`. After changing them run `python main.py purge-titles` to re-evaluate stored jobs.
 
 ### Candidate Profile (`data/candidate_profile.json`)
 

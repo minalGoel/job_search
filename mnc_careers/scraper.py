@@ -1,290 +1,251 @@
+"""MNC careers orchestrator — fetch every company's full listing, filter locally.
+
+Two lanes run concurrently:
+
+* **API lane** (httpx): companies whose ``ats_type`` has a typed fetcher in
+  ``mnc_careers/ats``. One shared ``AsyncClient``; ``MNC_API_CONCURRENCY``
+  companies at a time with ``MNC_PER_HOST_CONCURRENCY`` requests per host.
+* **HTML lane** (Playwright): everything else via ``html_generic``.
+
+Every company runs under ``asyncio.wait_for(MNC_COMPANY_TIMEOUT)`` and
+``gather(return_exceptions=True)`` so one broken portal can never abort the
+rest. Results are ``(jobs, [MNCRunResult])`` — the per-company outcomes are
+persisted in ``source_runs`` by ``main._run_mnc_jobs`` so we can see which of
+~350 portals need attention.
+"""
 from __future__ import annotations
 
 import asyncio
-from pathlib import Path
-from urllib.parse import urljoin
+import re
+import time
+from dataclasses import asdict, dataclass
+from typing import Any, Optional
+from urllib.parse import urlsplit
 
 import httpx
 import structlog
-from bs4 import BeautifulSoup
-from playwright.async_api import Page
 
 from browser.context import BrowserManager
+from config.settings import Settings
 from models.job import Job
-from mnc_careers.registry import MNC_REGISTRY, MNC
-from services.location_filter import is_acceptable_location, explain as explain_location
+from mnc_careers import html_generic
+from mnc_careers.ats import FETCHERS, FetchError, FetchResult, NotThisATS, strip_search_params
+from mnc_careers.filter import postings_to_jobs
+from mnc_careers.registry import MNC, MNC_REGISTRY
+from services.scoring import _company_slug
+from services.title_filter import current_params, is_relevant_title
 
 log = structlog.get_logger(__name__)
 
-PM_KEYWORDS = ["product manager", "product management", "senior pm", "group pm",
-               "lead pm", "head of product", "director product", "vp product",
-               "principal pm"]
+_UA = (
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
+    "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+)
+
+
+@dataclass
+class MNCRunResult:
+    name: str
+    ats: str
+    lane: str  # "api" | "html"
+    status: str  # "ok" | "empty" | "failed"
+    fetched: int = 0
+    total_reported: Optional[int] = None
+    pages: int = 0
+    cap_hit: bool = False
+    matched: int = 0
+    error: str = ""
+    duration_ms: int = 0
+    strategy: str = ""
+
+    def as_row(self) -> dict[str, Any]:
+        return asdict(self)
+
+
+def select_targets(
+    registry: list[MNC],
+    *,
+    only: Optional[list[str]] = None,
+    ats: Optional[str] = None,
+    aliases: Optional[dict[str, str]] = None,
+) -> list[MNC]:
+    """Entries with a listing/API URL, optionally narrowed by name or ATS."""
+    targets = [m for m in registry if m.pm_search_url or m.api_url]
+    if ats:
+        targets = [m for m in targets if (m.ats_type or "html") == ats]
+    if only:
+        wanted: set[str] = set()
+        for raw in only:
+            raw = raw.strip()
+            if not raw:
+                continue
+            wanted.add(_company_slug((aliases or {}).get(raw, raw)))
+        # whole-word match so "SAP" does not select "Publicis Sapient"
+        patterns = [re.compile(rf"\b{re.escape(w.strip().lower())}\b") for w in only if w.strip()]
+        targets = [
+            m for m in targets
+            if _company_slug(m.name) in wanted or any(p.search(m.name.lower()) for p in patterns)
+        ]
+    return targets
 
 
 class MNCCareerScraper:
-    """Scrapes US MNC career pages for PM roles in Delhi NCR."""
+    """Scrapes MNC careers portals for target roles in Delhi NCR."""
 
-    def __init__(self, browser_manager: BrowserManager) -> None:
+    def __init__(self, browser_manager: Optional[BrowserManager], settings: Optional[Settings] = None) -> None:
         self.bm = browser_manager
+        self.settings = settings or Settings()
         self._log = log.bind(module="mnc_careers")
+        self._host_sems: dict[str, asyncio.Semaphore] = {}
 
-    async def scrape_all(self) -> list[Job]:
-        """Scrape all MNC career pages that have pre-built PM search URLs."""
-        all_jobs: list[Job] = []
-        mncs_with_urls = [m for m in MNC_REGISTRY if m.pm_search_url]
+    # ------------------------------------------------------------------
+    def _host_sem(self, url: str) -> asyncio.Semaphore:
+        host = urlsplit(url).netloc
+        sem = self._host_sems.get(host)
+        if sem is None:
+            sem = asyncio.Semaphore(self.settings.MNC_PER_HOST_CONCURRENCY)
+            self._host_sems[host] = sem
+        return sem
 
-        self._log.info("mnc.starting", count=len(mncs_with_urls))
+    async def scrape_all(
+        self,
+        *,
+        only: Optional[list[str]] = None,
+        ats: Optional[str] = None,
+        cap: Optional[int] = None,
+        aliases: Optional[dict[str, str]] = None,
+    ) -> tuple[list[Job], list[MNCRunResult]]:
+        targets = select_targets(MNC_REGISTRY, only=only, ats=ats, aliases=aliases)
+        cap = cap or self.settings.MNC_MAX_POSTINGS
+        api_targets = [m for m in targets if m.ats_type in FETCHERS]
+        html_targets = [m for m in targets if m.ats_type not in FETCHERS]
+        self._log.info("mnc.starting", companies=len(targets), api_lane=len(api_targets), html_lane=len(html_targets), cap=cap)
 
-        # Process in batches of 5 to avoid overloading
-        for i in range(0, len(mncs_with_urls), 5):
-            batch = mncs_with_urls[i:i + 5]
-            tasks = [
-                self._scrape_mnc_api(mnc) if mnc.api_url else self._scrape_mnc(mnc)
-                for mnc in batch
-            ]
-            results = await asyncio.gather(*tasks, return_exceptions=True)
-
-            for mnc, result in zip(batch, results):
-                if isinstance(result, Exception):
-                    self._log.error("mnc.failed", company=mnc.name, error=str(result))
-                else:
-                    all_jobs.extend(result)
-                    self._log.info("mnc.scraped", company=mnc.name, jobs=len(result))
-
-            await asyncio.sleep(3)
-
-        return all_jobs
-
-    async def _scrape_mnc(self, mnc: MNC) -> list[Job]:
-        """Scrape a single MNC's career page for PM roles."""
+        # API lane first: companies whose ATS was mis-detected from the URL shape
+        # (NotThisATS) are rerouted to the HTML lane, which then runs once.
         jobs: list[Job] = []
-        page = None
+        results: list[MNCRunResult] = []
+        api_jobs, api_res = await self._api_lane(api_targets, cap)
+        jobs.extend(api_jobs)
+        rerouted: list[MNC] = []
+        for r in api_res:
+            if r.status == "failed" and r.error.startswith("NotThisATS:"):
+                m = next((x for x in api_targets if x.name == r.name), None)
+                if m is not None:
+                    rerouted.append(m)
+                    self._log.info("mnc.rerouted_to_html", company=m.name, reason=r.error)
+                    continue
+            results.append(r)
+        html_targets = html_targets + rerouted
+        if html_targets:
+            if self.bm is None:
+                self._log.warning("mnc.html_lane_skipped", reason="no browser", companies=len(html_targets))
+                for m in html_targets:
+                    results.append(MNCRunResult(m.name, m.ats_type or "html", "html", "failed", error="no browser available"))
+            else:
+                html_jobs, html_res = await self._html_lane(html_targets)
+                jobs.extend(html_jobs)
+                results.extend(html_res)
+        order = {m.name: i for i, m in enumerate(targets)}
+        results.sort(key=lambda r: order.get(r.name, 1 << 30))
+        return jobs, results
 
-        try:
-            page = await self._get_page(mnc.pm_search_url)
-            await asyncio.sleep(3)
+    # ------------------------------------------------------------------
+    async def _api_lane(self, mncs: list[MNC], cap: int) -> tuple[list[Job], list[MNCRunResult]]:
+        if not mncs:
+            return [], []
+        sem = asyncio.Semaphore(self.settings.MNC_API_CONCURRENCY)
+        limits = httpx.Limits(max_connections=self.settings.MNC_API_CONCURRENCY * 2, max_keepalive_connections=self.settings.MNC_API_CONCURRENCY)
+        headers = {"User-Agent": _UA, "Accept-Language": "en-IN,en;q=0.9"}
+        net_keywords = list(current_params().server_net_keywords)
+        async with httpx.AsyncClient(headers=headers, follow_redirects=True, timeout=self.settings.MNC_HTTP_TIMEOUT, limits=limits) as client:
 
-            # Wait for content to load (many use React/Angular SPAs)
-            try:
-                await page.wait_for_selector(
-                    "div[class*='job'], a[class*='job'], li[class*='job'], "
-                    "div[class*='position'], div[class*='result'], tr[class*='job']",
-                    timeout=12_000,
-                )
-            except Exception:
-                self._log.debug("mnc.wait_timeout", company=mnc.name)
+            async def _one(mnc: MNC) -> tuple[list[Job], MNCRunResult]:
+                async with sem:
+                    fetcher = FETCHERS[mnc.ats_type]
+                    url = mnc.api_url or mnc.pm_search_url
 
-            html = await page.content()
-            soup = BeautifulSoup(html, "html.parser")
-
-            # Job listing detection — ordered from most-specific to least-specific.
-            # Excludes a[class*='position'] (matches 'position-absolute' skip-nav links)
-            # and bare div[class*='card']/div[class*='listing'] (UI framework cards on
-            # React SPAs like JPMorgan/Citi are NOT job entries — 78 false positives).
-            listings = (
-                soup.select("div[class*='job-result'], div[class*='job-card'], div[class*='job-tile'], div[class*='job-item']")
-                or soup.select("div[class*='position-card'], div[class*='role-card']")
-                or soup.select("a[class*='job']")
-                or soup.select("li[class*='job'], li[class*='result']")
-                or soup.select("tr[class*='job'], div[class*='posting'], div[class*='opening']")
-                or soup.select("article")
-            )
-            # Filter out invisible/accessibility elements (sr-only skip links etc.)
-            listings = [el for el in listings if el.get_text(strip=True)]
-
-            self._log.info("mnc.listings_found", company=mnc.name, count=len(listings))
-
-            for el in listings:
-                try:
-                    text = el.get_text(" ", strip=True).lower()
-
-                    # Filter: must contain PM keyword
-                    if not any(kw in text for kw in PM_KEYWORDS):
-                        continue
-
-                    # Extract title — structured elements first, anchor text as last resort
-                    title_el = (
-                        el.select_one("h2, h3, h4")
-                        or el.select_one("a[class*='title'], span[class*='title'], div[class*='title']")
-                        or el.select_one("[class*='job-title'], [class*='jobtitle'], [class*='role-title'], [class*='position-title']")
-                        or el.select_one("a[href]")
-                    )
-                    title = title_el.get_text(strip=True) if title_el else ""
-
-                    # Extract link
-                    link_el = el.select_one("a[href]") or (el if el.name == "a" else None)
-                    href = link_el.get("href", "") if link_el else ""
-                    if href and not href.startswith("http"):
-                        href = urljoin(mnc.pm_search_url, href)
-
-                    # Extract location — ordered from most-specific to least-specific.
-                    # h2/h3/h4[class*='location'] covers Expedia (Results__list__location h5).
-                    # Never fall back to mnc.delhi_ncr_office: MNC search URLs may return
-                    # global results, so an unresolvable location must be rejected, not assumed NCR.
-                    loc_el = (
-                        el.select_one("h2[class*='location'], h3[class*='location'], h4[class*='location']")
-                        or el.select_one("span[class*='location'], div[class*='location'], span[class*='loc']")
-                        or el.select_one("li[class*='location'], p[class*='location']")
-                        or el.select_one("[data-testid*='location'], [data-automation*='location']")
-                        or el.select_one("[class*='job-location'], [class*='jobLocation']")
-                        or el.select_one("[class*='city'], [class*='region'], [class*='country']")
-                        or el.select_one("span[class*='meta'], div[class*='meta']")
-                    )
-                    location = loc_el.get_text(strip=True) if loc_el else ""
-
-                    if not (title and href):
-                        continue
-
-                    # Reject jobs outside Delhi NCR / global remote
-                    if not is_acceptable_location(location):
-                        self._log.debug("mnc.filtered_location",
-                                        company=mnc.name, title=title,
-                                        reason=explain_location(location))
-                        continue
-
-                    jobs.append(
-                        Job(
-                            platform=f"mnc_{mnc.name.lower().replace(' ', '_').replace('/', '_')}",
-                            title=title,
-                            company=mnc.name,
-                            location=location,
-                            apply_link=href,
-                            description=f"Direct from {mnc.name} careers page",
+                    async def _fetch() -> FetchResult:
+                        return await fetcher(
+                            mnc, client, cap=cap, net_keywords=net_keywords,
+                            title_predicate=is_relevant_title,
+                            host_sem=self._host_sem(url), log=self._log.bind(company=mnc.name),
                         )
+
+                    return await self._run_one(mnc, _fetch, lane="api")
+
+            return await self._gather(mncs, _one, lane="api")
+
+    async def _html_lane(self, mncs: list[MNC]) -> tuple[list[Job], list[MNCRunResult]]:
+        assert self.bm is not None
+        sem = asyncio.Semaphore(self.settings.MNC_HTML_CONCURRENCY)
+        cookies_dir = self.settings.COOKIES_DIR
+
+        async def _one(mnc: MNC) -> tuple[list[Job], MNCRunResult]:
+            async with sem:
+                raw_url = mnc.pm_search_url or mnc.api_url
+                listing_url = strip_search_params(raw_url)
+
+                async def _fetch() -> FetchResult:
+                    return await html_generic.fetch_all(
+                        mnc, self.bm, cookies_dir=cookies_dir,
+                        max_pages=self.settings.MNC_HTML_MAX_PAGES,
+                        listing_url=listing_url, net_url=raw_url,
+                        log=self._log.bind(company=mnc.name),
                     )
-                except Exception:
-                    self._log.exception("mnc.listing_failed", company=mnc.name)
 
-        except Exception:
-            self._log.exception("mnc.page_failed", company=mnc.name)
-        finally:
-            if page is not None:
-                try:
-                    await page.close()
-                except Exception:
-                    pass
+                return await self._run_one(mnc, _fetch, lane="html")
 
-        return jobs
+        return await self._gather(mncs, _one, lane="html")
 
-    async def _scrape_mnc_api(self, mnc: MNC) -> list[Job]:
-        """Fetch jobs via JSON API (no Playwright).
-
-        Supported api_type values:
-          "amazon_jobs"  — Amazon Jobs JSON endpoint
-          "greenhouse"   — Greenhouse boards-api (boards-api.greenhouse.io/v1/boards/{id}/jobs)
-          "lever"        — Lever public postings API (api.lever.co/v0/postings/{slug}?mode=json)
-        """
+    async def _gather(self, mncs: list[MNC], one, *, lane: str) -> tuple[list[Job], list[MNCRunResult]]:  # noqa: ANN001
+        outcomes = await asyncio.gather(*(one(m) for m in mncs), return_exceptions=True)
         jobs: list[Job] = []
-        platform = f"mnc_{mnc.name.lower().replace(' ', '_').replace('/', '_')}"
+        results: list[MNCRunResult] = []
+        for mnc, out in zip(mncs, outcomes):
+            if isinstance(out, BaseException):
+                # _run_one already catches everything; this is the belt to its braces.
+                results.append(MNCRunResult(mnc.name, mnc.ats_type or "html", lane, "failed", error=f"{type(out).__name__}: {out}"[:300]))
+                self._log.error("mnc.failed", company=mnc.name, lane=lane, error=str(out)[:200])
+                continue
+            lane_jobs, res = out
+            jobs.extend(lane_jobs)
+            results.append(res)
+        return jobs, results
+
+    async def _run_one(self, mnc: MNC, fetch, *, lane: str) -> tuple[list[Job], MNCRunResult]:  # noqa: ANN001
+        """Never raises: times the fetch, applies local filters, classifies the outcome."""
+        ats = mnc.ats_type or "html"
+        started = time.monotonic()
+        res = MNCRunResult(mnc.name, ats, lane, "failed")
         try:
-            async with httpx.AsyncClient(
-                headers={"User-Agent": "Mozilla/5.0"},
-                follow_redirects=True,
-                timeout=20,
-            ) as client:
-                resp = await client.get(mnc.api_url)
-                resp.raise_for_status()
-                data = resp.json()
-
-            if mnc.api_type == "amazon_jobs":
-                for job in data.get("jobs", []):
-                    title = job.get("title", "")
-                    location = job.get("location", "")
-                    job_path = job.get("job_path", "")
-                    href = f"https://www.amazon.jobs{job_path}" if job_path else ""
-
-                    title_lower = title.lower()
-                    if not any(kw in title_lower for kw in PM_KEYWORDS):
-                        continue
-                    if not (title and href):
-                        continue
-                    if not location and mnc.delhi_ncr_office:
-                        location = mnc.delhi_ncr_office
-                    if not is_acceptable_location(location):
-                        self._log.debug("mnc.filtered_location", company=mnc.name,
-                                        title=title, reason=explain_location(location))
-                        continue
-                    jobs.append(Job(
-                        platform=platform,
-                        title=title,
-                        company=mnc.name,
-                        location=location or mnc.delhi_ncr_office,
-                        apply_link=href,
-                        description=job.get("description_short", f"Direct from {mnc.name} careers page"),
-                    ))
-
-            elif mnc.api_type == "greenhouse":
-                # Greenhouse boards-api returns {"jobs": [...], "meta": {...}}
-                # Each job: {"id", "title", "location": {"name"}, "absolute_url", "content"}
-                for job in data.get("jobs", []):
-                    title = job.get("title", "")
-                    location = (job.get("location") or {}).get("name", "")
-                    href = job.get("absolute_url", "")
-                    description = job.get("content", "") or f"Direct from {mnc.name} careers page"
-                    # strip HTML tags from Greenhouse content
-                    import re as _re
-                    description = _re.sub(r"<[^>]+>", " ", description)[:500]
-
-                    if not any(kw in title.lower() for kw in PM_KEYWORDS):
-                        continue
-                    if not (title and href):
-                        continue
-                    if not location:
-                        location = mnc.delhi_ncr_office
-                    if not is_acceptable_location(location):
-                        self._log.debug("mnc.filtered_location", company=mnc.name,
-                                        title=title, reason=explain_location(location))
-                        continue
-                    jobs.append(Job(
-                        platform=platform,
-                        title=title,
-                        company=mnc.name,
-                        location=location or mnc.delhi_ncr_office,
-                        apply_link=href,
-                        description=description,
-                    ))
-
-            elif mnc.api_type == "lever":
-                # Lever public API returns a JSON array of postings
-                # Each posting: {"text": title, "categories": {"location": "..."}, "hostedUrl": url, "descriptionPlain": desc}
-                postings = data if isinstance(data, list) else data.get("data", [])
-                for job in postings:
-                    title = job.get("text", "")
-                    categories = job.get("categories") or {}
-                    location = categories.get("location", "") or categories.get("team", "")
-                    href = job.get("hostedUrl", "") or job.get("applyUrl", "")
-                    description = (job.get("descriptionPlain") or "")[:500]
-
-                    if not any(kw in title.lower() for kw in PM_KEYWORDS):
-                        continue
-                    if not (title and href):
-                        continue
-                    if not location:
-                        location = mnc.delhi_ncr_office
-                    if not is_acceptable_location(location):
-                        self._log.debug("mnc.filtered_location", company=mnc.name,
-                                        title=title, reason=explain_location(location))
-                        continue
-                    jobs.append(Job(
-                        platform=platform,
-                        title=title,
-                        company=mnc.name,
-                        location=location or mnc.delhi_ncr_office,
-                        apply_link=href,
-                        description=description or f"Direct from {mnc.name} careers page",
-                    ))
-
-            self._log.info("mnc.api_scraped", company=mnc.name, jobs=len(jobs))
-        except Exception:
-            self._log.exception("mnc.api_failed", company=mnc.name)
-        return jobs
-
-    async def _get_page(self, url: str) -> Page:
-        context = await self.bm.get_context("mnc_careers", Path("cookies"))
-        page = await context.new_page()
-        try:
-            await page.goto(url, wait_until="domcontentloaded", timeout=30_000)
-        except Exception:
-            await page.close()
-            raise
-        return page
+            fr: FetchResult = await asyncio.wait_for(fetch(), timeout=self.settings.MNC_COMPANY_TIMEOUT)
+        except asyncio.TimeoutError:
+            res.error = f"timeout after {self.settings.MNC_COMPANY_TIMEOUT}s"
+        except NotThisATS as exc:
+            res.error = f"NotThisATS: {exc}"[:300]
+        except FetchError as exc:
+            res.error = str(exc)[:300]
+        except Exception as exc:  # noqa: BLE001
+            res.error = f"{type(exc).__name__}: {exc}"[:300]
+            self._log.exception("mnc.unexpected", company=mnc.name, lane=lane)
+        else:
+            jobs, stats = postings_to_jobs(mnc, fr.postings, log=self._log)
+            res.fetched = stats.fetched
+            res.total_reported = fr.total_reported
+            res.pages = fr.pages
+            res.cap_hit = fr.cap_hit
+            res.matched = stats.matched
+            res.strategy = fr.strategy
+            res.status = "ok" if stats.fetched else "empty"
+            res.duration_ms = int((time.monotonic() - started) * 1000)
+            self._log.info(
+                "mnc.fetched", company=mnc.name, ats=ats, lane=lane, fetched=stats.fetched,
+                total=fr.total_reported, pages=fr.pages, cap_hit=fr.cap_hit,
+                title_rejected=stats.title_rejected, location_rejected=stats.location_rejected,
+                matched=stats.matched, ms=res.duration_ms,
+            )
+            return jobs, res
+        res.duration_ms = int((time.monotonic() - started) * 1000)
+        self._log.warning("mnc.failed", company=mnc.name, ats=ats, lane=lane, error=res.error, ms=res.duration_ms)
+        return [], res

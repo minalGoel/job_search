@@ -13,21 +13,15 @@ from playwright.async_api import Page, Response
 from browser.context import BrowserManager
 from models.job import Job
 from services.location_filter import is_acceptable_location, explain as explain_location
+from services.title_filter import current_params, is_relevant_title
 from vc_portals.registry import VC_REGISTRY, VCFund
 
 log = structlog.get_logger(__name__)
 
-PM_KEYWORDS = [
-    "product manager", "product management", "senior pm", "group pm",
-    "lead pm", "head of product", "director of product", "director product",
-    "vp product", "chief product", "associate pm", "founding pm",
-    "principal pm", "staff pm",
-]
-
 
 def _is_pm_role(title: str) -> bool:
-    t = title.lower()
-    return any(kw in t for kw in PM_KEYWORDS)
+    """Config-driven title relevance — single source of truth in services/title_filter."""
+    return is_relevant_title(title)
 
 
 class VCPortalScraper:
@@ -88,7 +82,7 @@ class VCPortalScraper:
                 try:
                     inp = await page.query_selector(selector)
                     if inp:
-                        await inp.fill(PM_KEYWORDS[0])
+                        await inp.fill(current_params().title_keywords[0])
                         await asyncio.sleep(3)
                         self._log.debug("vc.search_typed", vc=vc.name, selector=selector)
                         break
@@ -256,7 +250,9 @@ class VCPortalScraper:
         return jobs
 
     async def _get_page(self, url: str, intercept_fn=None) -> Page:
-        context = await self.bm.get_context("vc_portals", Path("cookies"))
+        from config.settings import Settings
+
+        context = await self.bm.get_context("vc_portals", Settings().COOKIES_DIR)
         page = await context.new_page()
         if intercept_fn:
             page.on("response", intercept_fn)

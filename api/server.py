@@ -11,6 +11,7 @@ from __future__ import annotations
 import asyncio
 import csv
 import json
+from functools import lru_cache
 import os
 import re
 import sqlite3
@@ -38,6 +39,10 @@ from storage.db import (
 )
 from outreach.db import OutreachDB
 from services.location_filter import is_acceptable_location
+from services.preflight import skip_reason, split_run_notes
+from services.location_filter import work_mode as _job_work_mode
+from services.title_filter import categorize as _categorize_title
+from config.settings import Settings
 
 # ── App setup ─────────────────────────────────────────────────────────────────
 app = FastAPI(title="PMHunt Dashboard", version="1.0")
@@ -55,6 +60,13 @@ PYTHON = str(ROOT / ".venv" / "bin" / "python")
 MAIN_PY = str(ROOT / "main.py")
 
 # ── DB helpers ────────────────────────────────────────────────────────────────
+
+def _decorate_job(job: dict) -> dict:
+    """Attach derived, filterable fields (single source of truth: services.*_filter)."""
+    job["title_category"] = _categorize_title(job.get("title", ""))
+    job["work_mode"] = _job_work_mode(job.get("location", ""), job.get("title", ""), job.get("description", ""))
+    return job
+
 
 def _jobs_db() -> JobDB:
     return JobDB(OUTPUT_DIR / "jobs.db")
@@ -249,6 +261,8 @@ def list_jobs(
     include_duplicates: bool = Query(False),
     location_mode: str = Query("strict", pattern="^(strict|all)$",
                                description="strict = only NCR + global remote; all = include mislocated legacy rows"),
+    title_category: str = Query("", description="product_manager | product_leadership | product_owner | product_marketing | product_design | product_analyst_ops | product_engineering | other_product"),
+    work_mode: str = Query("", pattern="^(|remote|hybrid|onsite|unknown|remote_or_hybrid)$"),
 ) -> dict:
     db = _jobs_db()
     try:
@@ -283,28 +297,24 @@ def list_jobs(
         }
         order = sort_map.get(sort, "priority_score DESC, scraped_at DESC")
 
-        # NOTE: location filtering happens post-SQL in Python because the
-        # rules (regional restrictions, country codes, etc.) are too rich for
-        # a LIKE clause. We over-fetch when strict mode is on, then trim.
+        # NOTE: location / title-category / work-mode filtering happens post-SQL
+        # in Python because the rules live in services.location_filter and
+        # services.title_filter (single source of truth) and are too rich for a
+        # LIKE clause. The table is small enough to over-fetch and trim.
+        rows = conn.execute(f"SELECT * FROM jobs {where} ORDER BY {order}", params).fetchall()
+        all_jobs = [_decorate_job(db._row_to_dict(r)) for r in rows]
+        filtered = all_jobs
         if location_mode == "strict":
-            rows = conn.execute(
-                f"SELECT * FROM jobs {where} ORDER BY {order}",
-                params,
-            ).fetchall()
-            all_jobs = [db._row_to_dict(r) for r in rows]
-            filtered = [j for j in all_jobs if is_acceptable_location(j.get("location", ""))]
-            total = len(filtered)
-            offset = (page - 1) * limit
-            jobs = filtered[offset:offset + limit]
-        else:
-            total_row = conn.execute(f"SELECT COUNT(*) FROM jobs {where}", params).fetchone()
-            total = total_row[0] if total_row else 0
-            offset = (page - 1) * limit
-            rows = conn.execute(
-                f"SELECT * FROM jobs {where} ORDER BY {order} LIMIT ? OFFSET ?",
-                params + [limit, offset],
-            ).fetchall()
-            jobs = [db._row_to_dict(r) for r in rows]
+            filtered = [j for j in filtered if is_acceptable_location(j.get("location", ""))]
+        if title_category:
+            filtered = [j for j in filtered if j["title_category"] == title_category]
+        if work_mode == "remote_or_hybrid":
+            filtered = [j for j in filtered if j["work_mode"] in ("remote", "hybrid")]
+        elif work_mode:
+            filtered = [j for j in filtered if j["work_mode"] == work_mode]
+        total = len(filtered)
+        offset = (page - 1) * limit
+        jobs = filtered[offset:offset + limit]
 
         # Join with applications table for status.
         # Ordering by last_action_at DESC and taking the first row per job_id
@@ -511,10 +521,15 @@ PLATFORM_META: dict[str, dict] = {
     "remoteok":       {"label": "RemoteOK",          "icon": "🌍", "color": "green"},
     "ycombinator":    {"label": "YCombinator",       "icon": "🚀", "color": "yellow"},
     "weekday":        {"label": "Weekday",           "icon": "📅", "color": "violet"},
+    "adzuna":         {"label": "Adzuna",            "icon": "🧭", "color": "green"},
+    "jooble":         {"label": "Jooble",            "icon": "🧲", "color": "orange"},
+    "careerjet":      {"label": "Careerjet",         "icon": "✈️", "color": "sky"},
 }
 
 CLOUDFLARE_PLATFORMS = {"wellfound", "glassdoor"}
-LOGIN_REQUIRED = {"linkedin", "instahyre", "cutshort", "weekday"}
+# Which platforms need a login is derived from the scraper classes (BaseScraper.requires_login)
+# inside get_scrapers(); keeping the registry import lazy avoids loading Playwright at server start.
+_settings = Settings()
 
 
 @app.get("/api/scrapers")
@@ -557,26 +572,37 @@ def get_scrapers() -> list[dict]:
             except Exception:
                 cookie_health[name] = "missing"
 
+    # Last run notes (errors / skips) per platform
+    db = _jobs_db()
+    try:
+        last_run = db.get_last_run() or {}
+    finally:
+        db.close()
+    real_errors, skipped = split_run_notes(last_run.get("errors") or {})
+
     result = []
-    from scrapers import SCRAPER_REGISTRY
-    for name in SCRAPER_REGISTRY:
+    from scrapers import SCRAPER_REGISTRY  # lazy: pulls in Playwright
+    for name, cls in SCRAPER_REGISTRY.items():
         meta = PLATFORM_META.get(name, {"label": name.title(), "icon": "🔲", "color": "slate"})
         last = last_scraped.get(name)
+        requires_login = bool(getattr(cls, "requires_login", False))
+        requires_api_key = bool(getattr(cls, "required_settings", ()))
         health = "ok"
         health_msg = ""
+        reason = skip_reason(cls, _settings, COOKIES_DIR)
         if name in CLOUDFLARE_PLATFORMS:
             health = "blocked"
             health_msg = "Cloudflare blocked"
-        elif name in LOGIN_REQUIRED:
-            c = cookie_health.get(name, "missing")
-            if c == "active":
-                health = "ok"
-            elif c == "expired":
-                health = "warning"
-                health_msg = "Session expired — re-login needed"
-            else:
-                health = "warning"
-                health_msg = "No session cookie — login required"
+        elif reason:
+            # preflight would skip this scraper (no cookies / no API key)
+            health = "warning"
+            health_msg = reason
+        elif requires_login and cookie_health.get(name) == "expired":
+            health = "warning"
+            health_msg = "Session expired — re-login needed"
+        elif name in real_errors:
+            health = "warning"
+            health_msg = f"Last run: {real_errors[name][:120]}"
 
         result.append({
             "name": name,
@@ -587,8 +613,11 @@ def get_scrapers() -> list[dict]:
             "last_scraped": last,
             "health": health,
             "health_msg": health_msg,
-            "requires_login": name in LOGIN_REQUIRED,
+            "requires_login": requires_login,
+            "requires_api_key": requires_api_key,
+            "uses_browser": bool(getattr(cls, "uses_browser", True)),
             "cloudflare": name in CLOUDFLARE_PLATFORMS,
+            "last_run_note": real_errors.get(name) or skipped.get(name) or "",
         })
 
     return result
@@ -629,7 +658,7 @@ async def ws_command(ws: WebSocket, cmd: str = Query(...)):
         allowed = {
             "vc-jobs", "mnc-jobs", "funding", "run-all",
             "recommend", "outreach-enrich", "outreach-send",
-            "company-intel-refresh",
+            "company-intel-refresh", "mnc-discover",
         }
         if cmd not in allowed:
             await ws.send_json({"type": "error", "msg": f"Command '{cmd}' not allowed"})
@@ -829,6 +858,124 @@ def get_vc_registry() -> list[dict]:
         ]
     except Exception as exc:
         return [{"error": str(exc)}]
+
+
+@app.get("/api/mnc-jobs")
+def get_mnc_jobs(page: int = 1, limit: int = 50) -> dict:
+    db = _jobs_db()
+    try:
+        offset = (page - 1) * limit
+        rows = db.conn.execute(
+            """SELECT * FROM jobs WHERE platform LIKE 'mnc_%' AND is_duplicate = 0
+               ORDER BY priority_score DESC, scraped_at DESC LIMIT ? OFFSET ?""",
+            (limit, offset),
+        ).fetchall()
+        total = db.conn.execute(
+            "SELECT COUNT(*) FROM jobs WHERE platform LIKE 'mnc_%' AND is_duplicate = 0"
+        ).fetchone()[0]
+        return {"jobs": [_decorate_job(db._row_to_dict(r)) for r in rows], "total": total, "page": page, "limit": limit}
+    finally:
+        db.close()
+
+
+@lru_cache(maxsize=1)
+def _csv_registry_names() -> dict[str, str]:
+    """registry name → name as written in mnc_input.csv, for every CSV row that maps."""
+    from mnc_careers.discovery import classify_against_registry, load_input_csv
+
+    return {r.registry_name: r.company.name for r in classify_against_registry(load_input_csv())
+            if r.classification in ("exact", "alias") and r.registry_name}
+
+
+def _mnc_verdict(m, run: dict, configured: bool, job_count: int) -> str:
+    """One sentence per company: what happened the last time we tried to extract its jobs."""
+    if not configured:
+        note = m.notes or ""
+        return note.split(";")[0] if note.upper().startswith("ABSORBED") else "No listing URL — not a target"
+    status = run.get("status", "")
+    if not status:
+        return "Never run yet" + (" (unverified HTML source)" if "UNVERIFIED" in (m.notes or "") else "")
+    fetched, total, matched = run.get("fetched") or 0, run.get("total_reported"), run.get("matched") or 0
+    if status == "ok":
+        seen = f"{fetched}/{total}" if total else f"{fetched}"
+        return f"Extraction works — {seen} postings read, {matched} product roles in NCR/remote, {job_count} in DB"
+    if status == "empty":
+        return "Portal reached but 0 postings parsed — open it manually; the page is probably JS-rendered or blocked"
+    err = (run.get("error") or "").splitlines()[0][:140]
+    return f"Extraction failed — {err}" if err else "Extraction failed"
+
+
+@app.get("/api/mnc-registry")
+def get_mnc_registry() -> dict:
+    """Every MNC careers portal with its ATS, HQ country and latest per-company outcome."""
+    from mnc_careers.registry import ADDED_FROM_CSV, MNC_REGISTRY, platform_for
+    from mnc_careers.ats import FETCHERS
+    from mnc_careers.links import linkedin_for, website_for
+
+    csv_names = _csv_registry_names()
+
+    db = _jobs_db()
+    try:
+        latest = db.get_latest_source_runs("mnc")
+        batches = db.get_source_run_batches("mnc", limit=5)
+        counts = {
+            r[0]: r[1]
+            for r in db.conn.execute(
+                "SELECT platform, COUNT(*) FROM jobs WHERE platform LIKE 'mnc_%' AND is_duplicate = 0 GROUP BY platform"
+            ).fetchall()
+        }
+    finally:
+        db.close()
+
+    companies = []
+    for m in MNC_REGISTRY:
+        ats = m.ats_type or "html"
+        configured = bool(m.pm_search_url or m.api_url)
+        # An unconfigured entry (e.g. ABSORBED into an acquirer) is never a target, so a
+        # stale source_runs row from before it was retired must not count as failed.
+        run = (latest.get(m.name) or {}) if configured else {}
+        job_count = counts.get(platform_for(m), 0)
+        in_csv = m.name in csv_names
+        origin = "csv-new" if m.name in ADDED_FROM_CSV else ("csv+existing" if in_csv else "existing")
+        companies.append({
+            "name": m.name,
+            "hq_country": m.hq_country,
+            "delhi_ncr_office": m.delhi_ncr_office,
+            "website": website_for(m),
+            "linkedin_url": linkedin_for(m),
+            "careers_url": m.careers_url,
+            "listing_url": m.pm_search_url or m.api_url,
+            "notes": m.notes,
+            "in_csv": in_csv,
+            "csv_name": csv_names.get(m.name, ""),
+            "origin": origin,
+            "ats_type": ats,
+            "lane": "api" if ats in FETCHERS else "html",
+            "configured": configured,
+            "job_count": job_count,
+            "verdict": _mnc_verdict(m, run, configured, job_count),
+            "last_status": run.get("status", ""),
+            "last_fetched": run.get("fetched"),
+            "last_total": run.get("total_reported"),
+            "last_matched": run.get("matched"),
+            "last_inserted": run.get("inserted"),
+            "last_cap_hit": bool(run.get("cap_hit")),
+            "last_error": run.get("error", ""),
+            "last_run_at": run.get("timestamp", ""),
+        })
+    summary = {
+        "companies": len(companies),
+        "configured": sum(c["configured"] for c in companies),
+        "ok": sum(c["last_status"] == "ok" for c in companies),
+        "empty": sum(c["last_status"] == "empty" for c in companies),
+        "failed": sum(c["last_status"] == "failed" for c in companies),
+        "never_run": sum(1 for c in companies if c["configured"] and not c["last_status"]),
+        "jobs": sum(c["job_count"] for c in companies),
+        "by_ats": {},
+    }
+    for c in companies:
+        summary["by_ats"][c["ats_type"]] = summary["by_ats"].get(c["ats_type"], 0) + 1
+    return {"summary": summary, "batches": batches, "companies": companies}
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -1055,9 +1202,11 @@ def get_runs(limit: int = 10) -> list[dict]:
             except Exception:
                 d["platforms_scraped"] = []
             try:
-                d["errors"] = json.loads(d.get("errors") or "{}")
+                notes = json.loads(d.get("errors") or "{}")
             except Exception:
-                d["errors"] = {}
+                notes = {}
+            # "skipped: ..." notes are configuration states, not failures — keep them apart
+            d["errors"], d["skipped"] = split_run_notes(notes)
             result.append(d)
         return result
     finally:

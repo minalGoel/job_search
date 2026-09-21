@@ -5,23 +5,56 @@ from __future__ import annotations
 # Positive values boost relevance_score; negative values demote it.
 # ---------------------------------------------------------------------------
 TITLE_WEIGHTS: list[tuple[str, int]] = [
-    # Negative / off-target specific matches first
+    # Negative / off-target specific matches first. Since the title GATE is now
+    # "anything with product" (config/search_params.py), the non-PM product
+    # families are demoted here rather than dropped, and surfaced via categories.
     ("associate product manager", -25),
     ("associate pm", -25),
     ("implementation manager", -35),
     ("business analyst", -35),
     ("project manager", -40),
     ("program manager", -20),
+    ("product marketing", -30),
+    ("product designer", -35),
+    ("product design", -30),
+    ("product owner", -12),
     ("product analyst", -20),
+    ("product operations", -20),
+    ("product ops", -20),
+    ("product support", -35),
+    ("product specialist", -30),
+    ("product engineer", -35),
+    ("product developer", -35),
     ("scrum master", -30),
-    # Positive matches
+    # Positive matches — most specific first
+    ("principal product manager", 34),
+    ("staff product manager", 32),
     ("group product manager", 32),
     ("senior product manager", 30),
     ("lead product manager", 28),
+    ("head of product", 28),
+    ("director of product", 26),
+    ("director, product", 26),
+    ("director product", 26),
+    ("vp product", 22),
+    ("vp of product", 22),
+    ("chief product officer", 18),
     ("product manager ii", 25),
     ("product manager 2", 25),
-    ("product manager", 18),      # keep last to avoid substring shadowing
+    ("product lead", 22),
+    ("product manager", 18),      # keep after the specific PM variants
+    ("product management", 14),   # generic "…, Product Management" titles
 ]
+
+# ---------------------------------------------------------------------------
+# Work mode — the user prefers remote/hybrid roles (services/location_filter.work_mode)
+# ---------------------------------------------------------------------------
+WORK_MODE_BONUS: dict[str, int] = {
+    "remote": 12,
+    "hybrid": 10,
+    "onsite": 0,
+    "unknown": 0,
+}
 
 # ---------------------------------------------------------------------------
 # Keyword scoring — searched in combined title + description (lowercased)
@@ -103,6 +136,7 @@ SALARY_SCORES: dict[str, int] = {
 # ---------------------------------------------------------------------------
 COMPANY_QUALITY_SCORES: dict[str, int] = {
     "mnc": 20,
+    "target_mnc": 15,        # company is on the user's MNC list (hq_country set from mnc_input.csv)
     "recent_funding": 15,
     "yc_company": 15,
     "recent_yc_batch": 10,

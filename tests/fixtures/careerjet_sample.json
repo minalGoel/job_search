@@ -1,0 +1,8 @@
+{
+  "type": "JOBS", "pages": 1, "hits": 3,
+  "jobs": [
+    {"title": "Lead Product Manager", "company": "MakeMyTrip", "locations": "Gurgaon, Haryana", "url": "https://jobview.careerjet.co.in/lead-product-manager-jobs-gurgaon-123.html?affid=xyz&src=api", "salary": "", "date": "2026-09-16 07:54:07", "description": "Own <b>growth</b> products"},
+    {"title": "Product Manager", "company": "Swiggy", "locations": "Bangalore, Karnataka", "url": "https://jobview.careerjet.co.in/pm-456.html", "salary": "", "date": "Tue, 16 Sep 2026 07:54:07 GMT", "description": ""},
+    {"title": "Production Manager", "company": "Maruti", "locations": "Gurgaon, Haryana", "url": "https://jobview.careerjet.co.in/prod-789.html", "salary": "", "date": "2026-09-16 07:54:07", "description": ""}
+  ]
+}

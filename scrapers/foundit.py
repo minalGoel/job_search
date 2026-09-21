@@ -110,31 +110,39 @@ class FounditScraper(BaseScraper):
                     pass
 
         # Register handler BEFORE goto so the first-load API call is captured
-        context = await self.bm.get_context(self.name, Path("cookies"))
-        page = await context.new_page()
-        page.on("response", _intercept)
-        await asyncio.sleep(random.uniform(2.0, 4.0))
+        context = await self.bm.get_context(self.name, self.cookies_dir)
+        page = None  # sentinel — finally block is safe even if new_page() raises
         try:
-            await page.goto(url, wait_until="domcontentloaded", timeout=20_000)
-        except Exception:
-            self._log.debug("page.goto_timeout", page=page_num)
+            page = await context.new_page()
+            page.on("response", _intercept)
+            await asyncio.sleep(random.uniform(2.0, 4.0))
+            try:
+                await page.goto(url, wait_until="domcontentloaded", timeout=20_000)
+            except Exception as exc:
+                # A failed navigation leaves a blank page — parsing it would
+                # yield 0 results and hide the real cause. Report and stop.
+                self._log.warning("page.goto_timeout", page=page_num, url=url, error=str(exc))
+                return []
 
-        await asyncio.sleep(4)
+            await asyncio.sleep(4)
 
-        # --- Strategy 1: JSON API ---
-        if captured_responses:
-            self._log.info("api.captured", count=len(captured_responses))
-            jobs = self._parse_api_response(captured_responses)
-            if jobs:
-                await page.close()
-                return jobs
+            # --- Strategy 1: JSON API ---
+            if captured_responses:
+                self._log.info("api.captured", count=len(captured_responses))
+                jobs = self._parse_api_response(captured_responses)
+                if jobs:
+                    return jobs
 
-        # --- Strategy 2: HTML fallback ---
-        self._log.info("fallback.html", page=page_num)
-        html = await page.content()
-        jobs = await self._parse_html(html, page)
-        await page.close()
-        return jobs
+            # --- Strategy 2: HTML fallback ---
+            self._log.info("fallback.html", page=page_num)
+            html = await page.content()
+            return await self._parse_html(html, page)
+        finally:
+            if page is not None:
+                try:
+                    await page.close()
+                except Exception:
+                    pass
 
     def _parse_api_response(self, responses: list[dict[str, Any]]) -> list[Job]:
         jobs: list[Job] = []

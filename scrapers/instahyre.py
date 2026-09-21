@@ -24,7 +24,6 @@ _BASE_HEADERS = {
     "Accept": "application/json",
     "Referer": "https://www.instahyre.com/search-jobs/",
 }
-_COOKIES_FILE = Path("cookies") / "instahyre.json"
 
 
 class InstahyreScraper(BaseScraper):
@@ -38,18 +37,20 @@ class InstahyreScraper(BaseScraper):
 
     name: str = "instahyre"
     requires_login: bool = True
+    uses_browser: bool = False
 
     def _load_cookies(self) -> dict[str, str]:
         """Load session cookies from the Playwright storage state file."""
+        cookies_file = self.cookies_dir / "instahyre.json"
         try:
-            data = json.loads(_COOKIES_FILE.read_text())
+            data = json.loads(cookies_file.read_text())
             return {
                 c["name"]: c["value"]
                 for c in data.get("cookies", [])
                 if "instahyre" in c.get("domain", "")
             }
         except Exception:
-            self._log.debug("cookies.load_failed", path=str(_COOKIES_FILE))
+            self._log.debug("cookies.load_failed", path=str(cookies_file))
             return {}
 
     async def scrape(self) -> list[Job]:

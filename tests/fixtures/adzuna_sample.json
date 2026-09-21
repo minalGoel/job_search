@@ -1,0 +1,48 @@
+{
+  "count": 5,
+  "results": [
+    {
+      "id": "5001",
+      "title": "Senior <strong>Product</strong> <strong>Manager</strong> - Payments",
+      "company": {"display_name": "Razorpay"},
+      "location": {"display_name": "Gurugram, Haryana", "area": ["India", "Haryana", "Gurugram"]},
+      "redirect_url": "https://www.adzuna.in/land/ad/5001?se=abc123&utm_medium=api&v=DEADBEEF",
+      "salary_min": 3000000, "salary_max": 4500000, "salary_is_predicted": "0",
+      "created": "2026-09-15T10:22:31Z",
+      "description": "Own the <strong>product</strong> roadmap for payments."
+    },
+    {
+      "id": "5002",
+      "title": "Product Manager",
+      "company": {"display_name": "Flipkart"},
+      "location": {"display_name": "Bengaluru, Karnataka", "area": ["India", "Karnataka", "Bengaluru"]},
+      "redirect_url": "https://www.adzuna.in/land/ad/5002?se=x&v=1",
+      "created": "2026-09-14T00:00:00Z", "description": "Bangalore role"
+    },
+    {
+      "id": "5003",
+      "title": "Product Marketing Manager",
+      "company": {"display_name": "Zomato"},
+      "location": {"display_name": "Gurugram, Haryana", "area": ["India", "Haryana", "Gurugram"]},
+      "redirect_url": "https://www.adzuna.in/land/ad/5003?se=x&v=1",
+      "created": "2026-09-14T00:00:00Z", "description": "PMM"
+    },
+    {
+      "id": "5004",
+      "title": "Product Manager II",
+      "company": {},
+      "location": {"display_name": "Noida, Uttar Pradesh", "area": ["India", "Uttar Pradesh", "Noida"]},
+      "redirect_url": "https://www.adzuna.in/land/ad/5004?se=x&v=1",
+      "created": "2026-09-14T00:00:00Z", "description": "no company"
+    },
+    {
+      "id": "5005",
+      "title": "Group Product Manager",
+      "company": {"display_name": "Paytm"},
+      "location": {"display_name": "Noida, Uttar Pradesh", "area": ["India", "Uttar Pradesh", "Noida"]},
+      "redirect_url": "https://www.adzuna.in/land/ad/5005?se=x&v=1",
+      "salary_min": 4000000, "salary_max": 4000000, "salary_is_predicted": "1",
+      "created": "2026-09-13T08:00:00.1234567Z", "description": "GPM"
+    }
+  ]
+}

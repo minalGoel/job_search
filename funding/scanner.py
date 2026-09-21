@@ -476,8 +476,9 @@ class FundingScanner:
     # Helpers
     # ------------------------------------------------------------------
     async def _get_page(self, url: str) -> Page:
-        from pathlib import Path
-        context = await self.bm.get_context("funding_scanner", Path("cookies"))
+        from config.settings import Settings
+
+        context = await self.bm.get_context("funding_scanner", Settings().COOKIES_DIR)
         page = await context.new_page()
         try:
             await page.goto(url, wait_until="domcontentloaded", timeout=30_000)

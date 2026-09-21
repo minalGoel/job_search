@@ -102,6 +102,31 @@ class JobDB:
                 errors TEXT DEFAULT '{}'
             );
 
+            -- Per-company outcome of a source run (MNC careers today). One row per
+            -- company per batch; batch_id groups one CLI invocation. Kept separate
+            -- from `runs` so ~350 rows never hijack "last run" (main.py status,
+            -- /api/stats read runs ORDER BY run_id DESC).
+            CREATE TABLE IF NOT EXISTS source_runs (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                batch_id TEXT NOT NULL,
+                source TEXT NOT NULL,
+                company TEXT NOT NULL,
+                ats_type TEXT DEFAULT '',
+                lane TEXT DEFAULT '',
+                status TEXT NOT NULL,
+                fetched INTEGER DEFAULT 0,
+                total_reported INTEGER,
+                pages INTEGER DEFAULT 0,
+                cap_hit INTEGER DEFAULT 0,
+                matched INTEGER DEFAULT 0,
+                inserted INTEGER DEFAULT 0,
+                error TEXT DEFAULT '',
+                strategy TEXT DEFAULT '',
+                duration_ms INTEGER DEFAULT 0,
+                timestamp TEXT NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_source_runs_lookup ON source_runs(source, company, timestamp);
+
             CREATE TABLE IF NOT EXISTS company_profiles (
                 normalized_company TEXT PRIMARY KEY,
                 company_display_name TEXT,
@@ -250,6 +275,7 @@ class JobDB:
         cp_cols = [
             ("is_yc_backed", "INTEGER DEFAULT 0"),
             ("yc_batch", "TEXT DEFAULT ''"),
+            ("hq_country", "TEXT DEFAULT ''"),  # from mnc_careers/data/mnc_input.csv via company_intel
         ]
         cp_existing = {
             row[1]
@@ -295,8 +321,8 @@ class JobDB:
     def insert_job(self, job: Job) -> bool:
         """Insert a job if it doesn't already exist. Returns True if inserted.
 
-        Silently rejects jobs whose title does not contain both 'product' and
-        'manager' — see services/title_filter.py for the single source of truth.
+        Silently rejects jobs whose title fails the configured title filter —
+        see services/title_filter.py for the single source of truth.
         """
         if not is_relevant_title(job.title):
             return False
@@ -329,6 +355,39 @@ class JobDB:
                 skipped += 1
         return inserted, skipped
 
+    def find_irrelevant_title_ids(self) -> list[str]:
+        """IDs of jobs whose title fails the (config-driven) title filter.
+
+        Evaluated in Python via services.title_filter so the rule lives in
+        exactly one place (a SQL LIKE would silently drift from it). Jobs with
+        an applications row are excluded so tracked applications survive.
+        """
+        rows = self.conn.execute(
+            """SELECT id, title FROM jobs
+               WHERE id NOT IN (SELECT job_id FROM applications WHERE job_id IS NOT NULL)"""
+        ).fetchall()
+        return [r["id"] for r in rows if not is_relevant_title(r["title"])]
+
+    def find_irrelevant_location_ids(self) -> list[str]:
+        """IDs of jobs whose location fails services.location_filter (jobs with applications excluded)."""
+        from services.location_filter import is_acceptable_location
+
+        rows = self.conn.execute(
+            """SELECT id, location FROM jobs
+               WHERE id NOT IN (SELECT job_id FROM applications WHERE job_id IS NOT NULL)"""
+        ).fetchall()
+        return [r["id"] for r in rows if not is_acceptable_location(r["location"] or "")]
+
+    def delete_jobs(self, ids: list[str]) -> int:
+        """Delete jobs (and their connection matches) by id. Returns the count deleted."""
+        if not ids:
+            return 0
+        placeholders = ",".join("?" * len(ids))
+        self.conn.execute(f"DELETE FROM job_connection_matches WHERE job_id IN ({placeholders})", ids)
+        self.conn.execute(f"DELETE FROM jobs WHERE id IN ({placeholders})", ids)
+        self.conn.commit()
+        return len(ids)
+
     def purge_irrelevant_titles(self) -> int:
         """Delete existing jobs whose title fails the title filter.
 
@@ -336,12 +395,7 @@ class JobDB:
         applied, etc.) so tracked applications are never silently removed.
         Returns the count of deleted rows.
         """
-        cur = self.conn.execute(
-            """SELECT id FROM jobs
-               WHERE (LOWER(title) NOT LIKE '%product%' OR LOWER(title) NOT LIKE '%manager%')
-               AND id NOT IN (SELECT job_id FROM applications WHERE job_id IS NOT NULL)"""
-        )
-        ids = [row[0] for row in cur.fetchall()]
+        ids = self.find_irrelevant_title_ids()
         if not ids:
             return 0
         placeholders = ",".join("?" * len(ids))
@@ -546,8 +600,8 @@ class JobDB:
                (normalized_company, company_display_name, company_domain,
                 is_mnc, is_funded, funding_series, funding_amount, funding_date,
                 pm_open_roles_count, seen_platforms, careers_page, hq_location,
-                is_yc_backed, yc_batch, last_refreshed_at)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                is_yc_backed, yc_batch, hq_country, last_refreshed_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                ON CONFLICT(normalized_company) DO UPDATE SET
                 company_display_name = excluded.company_display_name,
                 company_domain = excluded.company_domain,
@@ -562,6 +616,7 @@ class JobDB:
                 hq_location = excluded.hq_location,
                 is_yc_backed = MAX(excluded.is_yc_backed, company_profiles.is_yc_backed),
                 yc_batch = COALESCE(excluded.yc_batch, company_profiles.yc_batch),
+                hq_country = COALESCE(NULLIF(excluded.hq_country, ''), company_profiles.hq_country),
                 last_refreshed_at = excluded.last_refreshed_at""",
             (
                 profile["normalized_company"],
@@ -578,6 +633,7 @@ class JobDB:
                 profile.get("hq_location"),
                 int(profile.get("is_yc_backed", 0)),
                 profile.get("yc_batch", ""),
+                profile.get("hq_country", "") or "",
                 profile.get("last_refreshed_at", datetime.now().isoformat()),
             ),
         )
@@ -708,6 +764,53 @@ class JobDB:
         )
         self.conn.commit()
 
+    # ------------------------------------------------------------------
+    # source_runs — per-company diagnostics for MNC/VC style sources
+    # ------------------------------------------------------------------
+    def save_source_runs(self, source: str, rows: list[dict], batch_id: str) -> None:
+        """Bulk-insert per-company outcomes (one executemany, one commit)."""
+        if not rows:
+            return
+        now = datetime.now().isoformat()
+        self.conn.executemany(
+            """INSERT INTO source_runs (batch_id, source, company, ats_type, lane, status,
+               fetched, total_reported, pages, cap_hit, matched, inserted, error, strategy,
+               duration_ms, timestamp)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            [
+                (
+                    batch_id, source, r.get("name") or r.get("company", ""), r.get("ats", r.get("ats_type", "")),
+                    r.get("lane", ""), r.get("status", ""), int(r.get("fetched", 0) or 0), r.get("total_reported"),
+                    int(r.get("pages", 0) or 0), int(bool(r.get("cap_hit"))), int(r.get("matched", 0) or 0),
+                    int(r.get("inserted", 0) or 0), (r.get("error") or "")[:500], (r.get("strategy") or "")[:200],
+                    int(r.get("duration_ms", 0) or 0), now,
+                )
+                for r in rows
+            ],
+        )
+        self.conn.commit()
+
+    def get_latest_source_runs(self, source: str) -> dict[str, dict]:
+        """Latest row per company for *source* (keyed by company name)."""
+        rows = self.conn.execute(
+            """SELECT sr.* FROM source_runs sr
+               JOIN (SELECT company, MAX(id) AS max_id FROM source_runs WHERE source = ? GROUP BY company) latest
+                 ON latest.max_id = sr.id
+               WHERE sr.source = ?""",
+            (source, source),
+        ).fetchall()
+        return {r["company"]: dict(r) for r in rows}
+
+    def get_source_run_batches(self, source: str, limit: int = 10) -> list[dict]:
+        rows = self.conn.execute(
+            """SELECT batch_id, MIN(timestamp) AS timestamp, COUNT(*) AS companies,
+                      SUM(status = 'ok') AS ok, SUM(status = 'empty') AS empty, SUM(status = 'failed') AS failed,
+                      SUM(matched) AS matched, SUM(inserted) AS inserted
+               FROM source_runs WHERE source = ? GROUP BY batch_id ORDER BY MIN(id) DESC LIMIT ?""",
+            (source, limit),
+        ).fetchall()
+        return [dict(r) for r in rows]
+
     def get_last_run(self) -> Optional[dict]:
         row = self.conn.execute(
             "SELECT * FROM runs ORDER BY run_id DESC LIMIT 1"
@@ -774,14 +877,28 @@ class JobDB:
         ).fetchone()[0]
         return stats
 
-    def get_source_quality_stats(self) -> list[dict]:
+    def get_source_quality_stats(self, *, rollup_direct: bool = True) -> list[dict]:
+        """Per-source quality stats.
+
+        With ``rollup_direct`` (default) the hundreds of per-company
+        ``mnc_*`` / ``vc_*`` platforms collapse into two rows, ``mnc_careers``
+        and ``vc_portals``, so analytics stays readable; ``companies`` carries
+        how many distinct portals contributed.
+        """
+        group = (
+            """CASE WHEN platform LIKE 'mnc\_%' ESCAPE '\\' THEN 'mnc_careers'
+                    WHEN platform LIKE 'vc\_%' ESCAPE '\\' THEN 'vc_portals'
+                    ELSE platform END"""
+            if rollup_direct else "platform"
+        )
         rows = self.conn.execute(
-            """SELECT platform,
-                      COUNT(*) as total,
-                      AVG(priority_score) as avg_score,
-                      SUM(CASE WHEN priority_bucket IN ('must_apply','high') THEN 1 ELSE 0 END) as high_quality
-               FROM jobs WHERE is_duplicate = 0
-               GROUP BY platform ORDER BY avg_score DESC"""
+            f"""SELECT {group} AS platform,
+                       COUNT(*) AS total,
+                       COUNT(DISTINCT platform) AS companies,
+                       AVG(priority_score) AS avg_score,
+                       SUM(CASE WHEN priority_bucket IN ('must_apply','high') THEN 1 ELSE 0 END) AS high_quality
+                FROM jobs WHERE is_duplicate = 0
+                GROUP BY {group} ORDER BY avg_score DESC"""
         ).fetchall()
         return [dict(r) for r in rows]
 
