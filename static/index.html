@@ -407,7 +407,7 @@ body::after {
 .score-fill{height:100%;border-radius:4px;transition:width .4s ease}
 
 /* ── KANBAN ─────────────────────────────────── */
-.kanban-col{flex-shrink:0;width:244px}
+.kanban-col{flex:1 1 0;min-width:176px;max-width:280px}  /* 6 stages fit a 1440px viewport; extra columns scroll */
 .kanban-header{display:flex;align-items:center;gap:8px;margin-bottom:10px;padding:0 2px}
 .kanban-card {
   background: var(--card);
